@@ -1,0 +1,90 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ========================
+# Virtual Environments
+# ========================
+venv/
+ENV/
+.venv
+env.bak/
+venv.bak/
+
+# ========================
+# IDE / Editors
+# ========================
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ========================
+# Logs and Databases
+# ========================
+logs/
+*.log
+*.sqlite3
+*.db
+
+
+# ========================
+# OS Generated
+# ========================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+
+# ========================
+# Byte-compiled / optimized / DLL files
+# ========================
+*.py[cod]
+*$py.class
+*.so
+.Python
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+# 数据
+data/
+down/
+*.xlsx
+*.xls
+*.jpg
+*.png
+*.csv
+*.exe
+*.pkl
+/playwright_user_data
