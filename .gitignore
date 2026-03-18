@@ -88,3 +88,6 @@ down/
 *.exe
 *.pkl
 /playwright_user_data
+
+# 忽略环境配置文件（包含敏感信息）
+.env

@@ -11,7 +11,7 @@ import requests
 import numpy as np
 from functools import wraps
 from sqlalchemy import text
-#from spider.script.down_foura import foura_data
+#from spider.script.： import foura_data
 import calendar
 from core.config import settings
 import shutil
