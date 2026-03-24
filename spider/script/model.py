@@ -29,7 +29,7 @@ def get_foura_cookie():
     # cookie_result = db.get_cookies(f"foura")
     # return cookie_result["cookies"]
     # cookies_str =input("请输入cookie字符串：")
-    cookies_str="ULTRA_U_K=; JSESSIONID=BFB1B47704C717754BAE83E39FE7E264; moduleUrl=/layout/index.xhtml; BIGipServerywjk_new_pool1=276897196.10275.0000; Hm_lvt_f6097524da69abc1b63c9f8d19f5bd5b=1773731963; HMACCOUNT=75E5027F0DCAE56B; acctId=101433247; uid=wx-yeping6; route=ca23a3d5ed5be04ac19d88fa68a79a90; nodeInformation=10.195.54.4:all8080; Hm_lpvt_f6097524da69abc1b63c9f8d19f5bd5b=1773892486; pwdaToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJSRVMiLCJpc3MiOiJXUzRBIiwiZXhwIjoxNzc0MzIzOTk3LCJOQU5PU0VDT05EIjoxMzA0MzIyNTc1MzQ3OTc4NH0.72tmSo7CuADh8PclVRojljw56Nyy36inHoyIPqLZNE0"
+    cookies_str="ULTRA_U_K=; JSESSIONID=BFB1B47704C717754BAE83E39FE7E264; moduleUrl=/layout/index.xhtml; BIGipServerywjk_new_pool1=276897196.10275.0000; Hm_lvt_f6097524da69abc1b63c9f8d19f5bd5b=1773731963; HMACCOUNT=75E5027F0DCAE56B; acctId=101433247; uid=wx-yeping6; route=ca23a3d5ed5be04ac19d88fa68a79a90; nodeInformation=10.195.54.4:all8080; Hm_lpvt_f6097524da69abc1b63c9f8d19f5bd5b=1774331792; pwdaToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJSRVMiLCJpc3MiOiJXUzRBIiwiZXhwIjoxNzc0MzQ1MDY2LCJOQU5PU0VDT05EIjoxMjc4OTc0ODAxNzk0MjQ2Mn0.2N1pPJXlY3ZAxj8BTn292QzEA6i7gnOHxBsVzWFb02U"
     cookies = {}
     try:
         for cookie in cookies_str.split(';'):

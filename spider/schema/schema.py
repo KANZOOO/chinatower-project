@@ -1,4 +1,4 @@
-# 路径：
+# 路径：运维监控-智能运维-边缘网关设备管理-选择设备入网状态：入网/检修-点击查询/导出excel
 zhineng_wangguan={
     "INTO_DATA_1":{'AJAXREQUEST': '_viewRoot',
  'javax.faces.ViewState': 'j_id29',
@@ -78,7 +78,7 @@ zhineng_wangguan={
  'javax.faces.ViewState': 'j_id40'}
 }
 
-# 路径
+# 路径:运维监控-智能运维-智能摄像头管理-点击查询/导出excel
 zhineng_shexiangtou={
     "INTO_DATA_1":{'AJAXREQUEST': '_viewRoot',
  'javax.faces.ViewState': 'j_id30',
