@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     db_name: str
     chrome_binary_path:str
     chrome_user_data_dir:str
+    playwright_user_data_dir:str
     model_config = {
         "env_file": Path(__file__).parent.parent / ".env",
         "env_file_encoding": "utf-8",

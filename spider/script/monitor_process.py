@@ -3,6 +3,7 @@ import pandas as pd
 import xlwings as xw
 from core.config import settings
 import warnings
+from datetime import datetime, timedelta
 
 warnings.filterwarnings('ignore')
 
@@ -13,12 +14,58 @@ warnings.filterwarnings('ignore')
 - 核心特性：全量更新数据+保留Excel格式/公式
 - 性能提升：批量写入替代逐行逐列，效率提升10倍+
 - 改动：移除设备编码去重逻辑，保留所有原始数据行；移除非必要print输出
+- 对齐：核减清理逻辑与网关处理脚本完全一致，解决运行卡住问题
+- 新增：文件时间判断，过滤过旧文件
+- 同步：与网关脚本统一文件最新性检查逻辑、代码风格、错误处理
 """
+
+
+def get_file_modify_time(file_path):
+    """
+    获取文件的修改时间（时间戳转datetime）
+    """
+    try:
+        # 获取文件修改时间戳（兼容Windows/macOS）
+        modify_timestamp = os.path.getmtime(file_path)
+        modify_time = datetime.fromtimestamp(modify_timestamp)
+        return modify_time
+    except Exception as e:
+        print(f"获取文件修改时间失败：{file_path} -> {e}")
+        return None
+
+
+def check_if_latest_file(file_path, time_threshold_hours=24):
+    """
+    判断文件是否为最新版本（与网关脚本完全对齐）
+    :param file_path: 待检查文件路径
+    :param time_threshold_hours: 时间阈值（小时），默认24小时内修改的视为最新
+    :return: True（最新）/False（非最新）
+    """
+    if not os.path.exists(file_path):
+        return False
+
+    file_modify_time = get_file_modify_time(file_path)
+    if not file_modify_time:
+        return False
+
+    # 计算当前时间减去阈值时间
+    latest_valid_time = datetime.now() - timedelta(hours=time_threshold_hours)
+
+    # 判断文件修改时间是否在阈值内
+    is_latest = file_modify_time >= latest_valid_time
+
+    # 打印详细信息（与网关脚本格式统一）
+    print(f"\n📄 文件检查：{os.path.basename(file_path)}")
+    print(f"   修改时间：{file_modify_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   最新有效时间：{latest_valid_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   是否最新：{'✅ 是' if is_latest else '❌ 否'}")
+
+    return is_latest
 
 
 def load_excel_data(file_path, sheet_name=0):
     """
-    加载Excel文件数据（兼容xlsx/xls）
+    加载Excel文件数据（兼容xlsx/xls，与网关脚本完全对齐）
     """
     try:
         if not os.path.exists(file_path):
@@ -34,8 +81,18 @@ def load_excel_data(file_path, sheet_name=0):
 def preprocess_camera_data(camera_raw_path):
     """
     Step1：pandas预处理摄像头数据（筛选字段+新增字段）
+    - 完全对齐网关脚本的预处理逻辑和输出格式
     - 移除：设备编码去重逻辑
     """
+    # ========== 统一文件最新性判断（替换原有的check_file_time_valid） ==========
+    TIME_THRESHOLD_HOURS = 24  # 与网关脚本保持一致
+    if not check_if_latest_file(camera_raw_path, TIME_THRESHOLD_HOURS):
+        print(f"\n❌ 错误：摄像头原始数据文件不是最新版本！")
+        print(f"   文件路径：{camera_raw_path}")
+        print(f"   要求：文件需在最近{TIME_THRESHOLD_HOURS}小时内更新")
+        print(f"   中断执行，请使用最新的摄像头原始数据文件！")
+        return pd.DataFrame()
+
     # 1. 加载原始数据
     df_camera = load_excel_data(camera_raw_path)
     if df_camera.empty:
@@ -49,7 +106,7 @@ def preprocess_camera_data(camera_raw_path):
             df_camera[field] = ""
     df_main = df_camera[core_fields].copy()
 
-    # 3. 新增8个空字段
+    # 3. 新增8个空字段（与网关脚本字段完全一致）
     new_fields = ["是否临时入网", "整合站名与入临时入网", "区域", "分管维护员", "片区",
                   "是否代维处理", "核减", "是否超7天"]
     for field in new_fields:
@@ -61,7 +118,7 @@ def preprocess_camera_data(camera_raw_path):
 
 def safe_get_range_value(range_obj):
     """
-    安全读取xlwings range的值，兼容空值/单个值/二维列表
+    安全读取xlwings range的值，兼容空值/单个值/二维列表（与网关脚本完全对齐）
     """
     try:
         value = range_obj.value
@@ -84,10 +141,12 @@ def safe_get_range_value(range_obj):
 def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
     """
     Step2&3：xlwings更新摄像头总清单（优化版）
+    - 完全对齐网关脚本的实现逻辑、代码风格、错误处理
     - 核心优化1：批量写入数据，替代逐行逐列
     - 核心优化2：设置编码列为文本格式，解决科学计数法问题
     - 兼容：所有range使用元组格式 (row, col)
     - 核心：仅清空内容，保留所有格式/公式
+    - 新增：自动备份原sheet+隐藏+重命名清理后的sheet
     """
     if df_updated.empty:
         print("❌ 无更新数据，终止写入")
@@ -96,16 +155,17 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
     app = None
     wb = None
     try:
-        # 初始化Excel应用
+        # 初始化WPS/Excel应用（与网关脚本对齐）
         app = xw.App(visible=False, add_book=False)
         wb = app.books.open(target_excel_path)
-        wb.display_alerts = False  # 关闭Excel提示框
+        wb.display_alerts = False  # 关闭提示框（统一写法）
 
         # 检查sheet是否存在
         if sheet_name not in [s.name for s in wb.sheets]:
-            ws = wb.sheets.add(name=sheet_name)
-        else:
-            ws = wb.sheets[sheet_name]
+            print(f"❌ 目标Sheet「{sheet_name}」不存在")
+            return False
+
+        ws = wb.sheets[sheet_name]
 
         # ========== 1. 清空原有数据行（保留表头） ==========
         start_row = 2
@@ -136,7 +196,7 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
         for col_name in code_cols:
             if col_name in header_dict:
                 col_idx = header_dict[col_name]
-                # 使用 number_format 属性（跨平台）
+                # 使用 number_format 属性（跨平台，与网关脚本对齐）
                 ws.range((1, col_idx), (data_rows + 1, col_idx)).number_format = "@"
 
         # 2.2 批量写入数据（按列批量写入，效率最大化）
@@ -147,7 +207,7 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
             # 批量写入整列数据
             ws.range((2, col_idx), (data_rows + 1, col_idx)).value = [[val] for val in col_data]
 
-        # ========== 3. 批量设置Excel公式（摄像头业务逻辑） ==========
+        # ========== 3. 批量设置Excel公式（与网关脚本逻辑对齐） ==========
         # 3.1 是否临时入网（VLOOKUP匹配）
         if "是否临时入网" in header_dict and "设备编码" in header_dict:
             code_col = header_dict["设备编码"]
@@ -222,11 +282,11 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
             formula = f'=VLOOKUP({first_code_cell},核减清单!A:C,3,0)'
             formula_range.formula = formula
 
-        # 3.7 根据核减列清空对应分管维护员、区域列数据（和gateway保持一致的逻辑）
+        # 3.7 核减清理逻辑（与网关脚本完全对齐）
         if all(col in header_dict for col in ["核减", "分管维护员", "区域"]):
             try:
                 # 触发Excel重新计算，确保核减列公式结果生效
-                ws.api.calculate()
+                wb.app.calculate()
 
                 # 读取摄像头总清单的完整数据（包含表头）
                 data = ws.used_range.value
@@ -282,7 +342,7 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
                         # 批量写入所有数据（一次性写入）
                         ws_new.range("A2").value = df.values
 
-                        # ========== Sheet重命名+隐藏+替换逻辑 ==========
+                        # ========== Sheet重命名+隐藏+替换逻辑（与网关脚本完全对齐） ==========
                         # 1. 重命名原始摄像头总清单为摄像头总清单_备份
                         backup_sheet_name = "摄像头总清单_备份"
                         # 如果备份sheet已存在，先删除
@@ -313,7 +373,7 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
         traceback.print_exc()
         return False
     finally:
-        # 确保Excel进程完全关闭（增强版）
+        # 确保Excel进程完全关闭（与网关脚本完全对齐的增强版关闭逻辑）
         if wb:
             try:
                 wb.close()
@@ -328,15 +388,13 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
                 app.kill()  # 强制结束进程
             except:
                 pass
-        # 额外清理：释放xlwings资源
 
 
 def process_camera_main_list():
     """
-    主处理函数：串联数据预处理+xlwings更新
+    主处理函数：串联数据预处理+xlwings更新（与网关脚本完全对齐）
     """
     # 1. 配置文件路径
-    # 摄像头原始数据文件路径（xlsx/xls兼容）
     camera_xlsx_path = settings.resolve_path("spider/script/station/down/边缘摄像头.xlsx")
     camera_xls_path = os.path.splitext(camera_xlsx_path)[0] + ".xls"
 
@@ -358,7 +416,7 @@ def process_camera_main_list():
         print(f"❌ 目标Excel不存在：{target_excel_path}")
         return
 
-    # 2. 预处理数据（已移除去重）
+    # 2. 预处理数据（已整合文件最新性检查）
     df_updated = preprocess_camera_data(camera_raw_path)
     if df_updated.empty:
         return
@@ -370,12 +428,7 @@ def process_camera_main_list():
         df_updated=df_updated
     )
 
-    if update_success:
-        print("\n✅ 摄像头总清单更新成功！")
-    else:
-        print("\n❌ 摄像头总清单更新失败！")
 
-
-# # 测试执行
-# if __name__ == '__main__':
-#     process_camera_main_list()
+# 测试执行
+if __name__ == '__main__':
+    process_camera_main_list()

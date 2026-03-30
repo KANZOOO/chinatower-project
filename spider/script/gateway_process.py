@@ -1,10 +1,9 @@
 import os
 import pandas as pd
-# import numpy as np
 import xlwings as xw
-# from datetime import datetime
 from core.config import settings
 import warnings
+from datetime import datetime, timedelta
 
 warnings.filterwarnings('ignore')
 
@@ -15,7 +14,51 @@ warnings.filterwarnings('ignore')
 - 核心特性：全量更新数据+保留Excel格式/公式
 - 性能提升：批量写入替代逐行逐列，效率提升10倍+
 - 新增特性：自动备份原sheet+隐藏+重命名清理后的sheet
+- 新增：文件最新性判断，确保只处理最新的边缘网关文件
 """
+
+
+def get_file_modify_time(file_path):
+    """
+    获取文件的修改时间（时间戳转datetime）
+    """
+    try:
+        # 获取文件修改时间戳（兼容Windows/macOS）
+        modify_timestamp = os.path.getmtime(file_path)
+        modify_time = datetime.fromtimestamp(modify_timestamp)
+        return modify_time
+    except Exception as e:
+        print(f"获取文件修改时间失败：{file_path} -> {e}")
+        return None
+
+
+def check_if_latest_file(file_path, time_threshold_hours=24):
+    """
+    判断文件是否为最新版本
+    :param file_path: 待检查文件路径
+    :param time_threshold_hours: 时间阈值（小时），默认24小时内修改的视为最新
+    :return: True（最新）/False（非最新）
+    """
+    if not os.path.exists(file_path):
+        return False
+
+    file_modify_time = get_file_modify_time(file_path)
+    if not file_modify_time:
+        return False
+
+    # 计算当前时间减去阈值时间
+    latest_valid_time = datetime.now() - timedelta(hours=time_threshold_hours)
+
+    # 判断文件修改时间是否在阈值内
+    is_latest = file_modify_time >= latest_valid_time
+
+    # 打印详细信息
+    print(f"\n📄 文件检查：{os.path.basename(file_path)}")
+    print(f"   修改时间：{file_modify_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   最新有效时间：{latest_valid_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   是否最新：{'✅ 是' if is_latest else '❌ 否'}")
+
+    return is_latest
 
 
 def load_excel_data(file_path, sheet_name=0):
@@ -229,7 +272,7 @@ def update_gateway_sheet_with_xlwings(target_excel_path, sheet_name, df_updated)
         if all(col in header_dict for col in ["核减", "分管维护员", "区域"]):
             try:
                 # 触发Excel重新计算，确保核减列公式结果生效
-                ws.api.calculate()
+                wb.app.calculate()
 
                 # 读取网关总清单的完整数据（包含表头）
                 data = ws.used_range.value
@@ -331,7 +374,6 @@ def update_gateway_sheet_with_xlwings(target_excel_path, sheet_name, df_updated)
                 app.kill()  # 强制结束进程
             except:
                 pass
-        # 额外清理：释放xlwings资源
 
 
 def process_gateway_main_list():
@@ -353,6 +395,16 @@ def process_gateway_main_list():
         print(f"   - {gateway_xls_path}")
         return
 
+    # ========== 新增：文件最新性判断 ==========
+    # 可自定义时间阈值（例如：24小时内修改的视为最新）
+    TIME_THRESHOLD_HOURS = 24  # 可根据需求调整
+    if not check_if_latest_file(gateway_raw_path, TIME_THRESHOLD_HOURS):
+        print(f"\n❌ 错误：边缘网关文件不是最新版本！")
+        print(f"   文件路径：{gateway_raw_path}")
+        print(f"   要求：文件需在最近{TIME_THRESHOLD_HOURS}小时内更新")
+        print(f"   中断执行，请使用最新的边缘网关文件！")
+        return  # 中断执行
+
     # 目标Excel文件
     target_excel_path = settings.resolve_path(
         "spider/script/station/down/智能运维离线通报模板.xlsx")
@@ -373,6 +425,6 @@ def process_gateway_main_list():
     )
 
 
-# # 测试执行
-# if __name__ == '__main__':
-#     process_gateway_main_list()
+# 测试执行
+if __name__ == '__main__':
+    process_gateway_main_list()
