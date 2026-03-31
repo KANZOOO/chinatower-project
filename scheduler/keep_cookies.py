@@ -20,7 +20,8 @@ def run_task_in_thread(task_func, task_name):
 
 def refresh_all_cookies():
     print("强制刷新所有账号cookie...")
-    keep_foura().get_cookies()
+    # keep_foura().get_cookies()
+    keep_foura()
 def schedule_loop():
     """主调度循环"""
     print("循环开始")

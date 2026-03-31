@@ -10,11 +10,11 @@ import requests
 import numpy as np
 from functools import wraps
 from sqlalchemy import text
+from spider.schema.data_edge_x import data
 #from spider.schema.schema import data
 #import calenda
 #from core.config import settings
 #import shutil
-from spider.schema.data_edge_x import data
 """
 通用函数模块，包含项目中常用的工具函数，如重试装饰器、请求函数、文件操作函数等。
 """
@@ -29,8 +29,9 @@ def get_foura_cookie():
     # cookie_result = db.get_cookies(f"foura")
     # return cookie_result["cookies"]
     # cookies_str =input("请输入cookie字符串：")
-    cookies_str="Hm_lvt_f6097524da69abc1b63c9f8d19f5bd5b=1774852953; route=528ccec9890537400fabeee91bd86ea5; JSESSIONID=CEA3591F068E513C1C69B47A456B1684; pwdaToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJSRVMiLCJpc3MiOiJXUzRBIiwiZXhwIjoxNzc0ODY0ODQ1LCJOQU5PU0VDT05EIjoxMzU4NDA3MzYzMDE1OTM2M30.CbQVL7BrSTNSnXVOJoUM6hqId8EZWUkIlZ0pWBppnD8; acctId=101433247; uid=wx-yeping6; moduleUrl=/layout/index.xhtml; nodeInformation=10.195.54.7:all8180; BIGipServerywjk_new_pool1=260119980.10275.0000"
+    cookies_str="route=fec3030e0db9c083a93cd1cb37b78d9e; JSESSIONID=76D1B3BE8F57B97F195925A644B1D7FE; pwdaToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJSRVMiLCJpc3MiOiJXUzRBIiwiZXhwIjoxNzc0OTMyMDQ3LCJOQU5PU0VDT05EIjoxMzM3NjcyNjU0MTg5NTE2NX0.OEvF2F_bnrqa4j-QtaPMcpoabgji8nkNMI0N2jRSt70; acctId=101433247; uid=wx-yeping6; moduleUrl=/layout/index.xhtml; nodeInformation=10.195.54.4:all8480; BIGipServerywjk_new_pool1=260119980.10275.0000; ZSMART_LOCALE=zh; SESSION=fff72745-e6a8-4590-82eb-0733b4f0f358; lbinsertroute=572ec81be52ae151217c9981ccc4b3b3"
     cookies = {}
+
     try:
         for cookie in cookies_str.split(';'):
             key, value = cookie.split('=', 1)
