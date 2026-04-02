@@ -2,7 +2,7 @@ from bs4 import BeautifulSoup
 import os
 import pandas as pd
 from datetime import datetime,timedelta
-#from core.sql import sql_orm
+from core.sql import sql_orm
 from xlsx2csv import Xlsx2csv
 import time
 import re
@@ -11,26 +11,19 @@ import numpy as np
 from functools import wraps
 from sqlalchemy import text
 from spider.schema.data_edge_x import data
-#from spider.schema.schema import data
-#import calenda
-#from core.config import settings
-#import shutil
 """
 通用函数模块，包含项目中常用的工具函数，如重试装饰器、请求函数、文件操作函数等。
 """
-def get_foura_cookie():
+def get_foura_cookie(cookie_id="wx-yeping6"):
     """
-    从数据库中获取指定ID的foura cookie信息。
+    从数据库中获取指定账号的 foura cookie 信息。
 
-    :param ID: 数据库中cookie记录的ID，默认为1（对应foura1）。
-    :return: 解析后的cookie字典；若ID不存在/格式错误，返回空字典。
+    :param cookie_id: 数据库中 cookie 记录的 ID（账号名），默认为"wx-yeping6"。
+    :return: 解析后的 cookie 字典；若 ID 不存在/格式错误，返回空字典。
     """
-    # db = sql_orm()
-    # cookie_result = db.get_cookies(f"foura")
-    # return cookie_result["cookies"]
-    # cookies_str =input("请输入cookie字符串：")
-    cookies_str="route=fec3030e0db9c083a93cd1cb37b78d9e; JSESSIONID=76D1B3BE8F57B97F195925A644B1D7FE; pwdaToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJSRVMiLCJpc3MiOiJXUzRBIiwiZXhwIjoxNzc0OTMyMDQ3LCJOQU5PU0VDT05EIjoxMzM3NjcyNjU0MTg5NTE2NX0.OEvF2F_bnrqa4j-QtaPMcpoabgji8nkNMI0N2jRSt70; acctId=101433247; uid=wx-yeping6; moduleUrl=/layout/index.xhtml; nodeInformation=10.195.54.4:all8480; BIGipServerywjk_new_pool1=260119980.10275.0000; ZSMART_LOCALE=zh; SESSION=fff72745-e6a8-4590-82eb-0733b4f0f358; lbinsertroute=572ec81be52ae151217c9981ccc4b3b3"
-    cookies = {}
+    db = sql_orm()
+    cookie_result = db.get_cookies(cookie_id)
+    return cookie_result["cookies"]
 
     try:
         for cookie in cookies_str.split(';'):
