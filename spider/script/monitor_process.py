@@ -261,7 +261,7 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
             formula = f'=VLOOKUP({first_code_cell},核减清单!A:C,3,0)'
             formula_range.formula = formula
 
-        # 3.7 核减清理（原始逻辑保留）
+        # 3.7 核减清理（优化逻辑：仅首次运行执行，后续跳过）
         if all(col in header_dict for col in ["核减", "分管维护员", "区域"]):
             try:
                 wb.app.calculate()
@@ -271,24 +271,48 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
                     reduce_series = df["核减"].astype(str)
                     mask = df["核减"].notna() & (reduce_series.str.strip() != "") & (~reduce_series.str.startswith("#", na=False))
                     clear_count = mask.sum()
+                    
+                    # 检查是否已存在备份 Sheet
+                    backup_sheet_name = "摄像头总清单_备份"
+                    backup_exists = backup_sheet_name in [s.name for s in wb.sheets]
+                    
                     if clear_count > 0:
-                        df.loc[mask, ["分管维护员", "区域"]] = ""
-                        print(f"✅ 摄像头数据 - 清理 {clear_count} 行核减数据")
+                        if not backup_exists:
+                            # 第一次运行：执行核减清理流程
+                            df.loc[mask, ["分管维护员", "区域"]] = ""
+                            print(f"✅ 摄像头数据 - 清理 {clear_count} 行核减数据")
 
-                        new_sheet = wb.sheets.add("摄像头总清单_核减清理", after=ws)
-                        ws.range("A1").resize(column_size=len(df.columns)).copy()
-                        new_sheet.range("A1").paste(paste="all")
+                            new_sheet = wb.sheets.add("摄像头总清单_核减清理", after=ws)
+                            ws.range("A1").resize(column_size=len(df.columns)).copy()
+                            new_sheet.range("A1").paste(paste="all")
 
-                        for c in ["设备编码", "站址资源编码"]:
-                            if c in df.columns:
-                                col_idx = df.columns.get_loc(c) + 1
-                                new_sheet.range((2, col_idx), (df.shape[0]+1, col_idx)).number_format = "@"
-                                df[c] = df[c].apply(lambda x: f"'{x}" if str(x).strip() else x)
+                            for c in ["设备编码", "站址资源编码"]:
+                                if c in df.columns:
+                                    col_idx = df.columns.get_loc(c) + 1
+                                    new_sheet.range((2, col_idx), (df.shape[0]+1, col_idx)).number_format = "@"
+                                    df[c] = df[c].apply(lambda x: f"'{x}" if str(x).strip() else x)
 
-                        new_sheet.range("A2").value = df.values
-                        ws.name = "摄像头总清单_备份"
-                        ws.visible = False
-                        new_sheet.name = "摄像头总清单"
+                            new_sheet.range("A2").value = df.values
+                            
+                            ws.name = backup_sheet_name
+                            ws.visible = False
+                            new_sheet.name = "摄像头总清单"
+                            print(f"📋 已创建备份 Sheet（首次运行）")
+                        else:
+                            # 后续运行：跳过核减清理，只更新数据
+                            print(f"ℹ️ 备份 Sheet 已存在，跳过核减清理流程")
+                            df.loc[mask, ["分管维护员", "区域"]] = ""
+                            
+                            # 直接在当前 Sheet 上更新数据
+                            for col_name in ["分管维护员", "区域"]:
+                                if col_name in header_dict:
+                                    col_idx = header_dict[col_name]
+                                    clear_start = 2
+                                    clear_end = data_rows + 1
+                                    ws.range((clear_start, col_idx), (clear_end, col_idx)).value = [
+                                        [df.at[i, col_name]] for i in range(len(df))
+                                    ]
+                            print(f"✅ 已更新核减相关列数据（保留原有备份）")
             except Exception as e:
                 print(f"⚠️ 核减清理失败：{e}")
 
