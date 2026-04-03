@@ -1,7 +1,13 @@
 import sys
 import os
-from spider.spider import download_shunt_meter_excel, down_file
-from spider.schema.schema_jilianghzibiao import yidong_jiliang,yidong_kaiguan,yidong_jiliang5g,liantong_jiliang,liantong_kaiguan,liantong_jiliang5g,dianxin_jiliang,dianxin_kaiguan,dianxin_jiliang5g
+
+# 添加项目根目录到 Python 路径
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from app.service.jiliangzhibiao.spider.spider import download_shunt_meter_excel, down_file
+from app.service.jiliangzhibiao.spider.schema.schema_jilianghzibiao import yidong_jiliang,yidong_kaiguan,yidong_jiliang5g,liantong_jiliang,liantong_kaiguan,liantong_jiliang5g,dianxin_jiliang,dianxin_kaiguan,dianxin_jiliang5g
 from core.config import settings
 
 class Jiliangzhibiao:

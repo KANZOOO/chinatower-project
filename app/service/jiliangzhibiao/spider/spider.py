@@ -185,12 +185,10 @@ def download_shunt_meter_excel():
     session.headers.update(GLOBAL_HEADERS)
     session.cookies.update(GLOBAL_COOKIE_DICT)
 
-    print("正在请求数据列表...")
     url1 = "http://omms.chinatowercom.cn:9000/devMge/getShuntMeteringData.go"
     resp1 = session.post(url1, data=data1, timeout=30)
     resp1.raise_for_status()
 
-    print("正在导出 Excel...")
     url2 = "http://omms.chinatowercom.cn:9000/devMge/exportSMDataExcel.go?ids=1"
     resp2 = session.get(url2, stream=True, timeout=60)
     resp2.raise_for_status()
