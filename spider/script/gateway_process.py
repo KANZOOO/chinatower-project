@@ -252,57 +252,43 @@ def update_gateway_sheet_with_xlwings(target_excel_path, sheet_name, df_updated)
             formula = f'=VLOOKUP({first_code_cell},核减清单!A:C,3,0)'
             formula_range.formula = formula
 
-        # 3.7 核减清理（你的原有逻辑）
+        # 3.7 核减清理（优化版：保留原Sheet+公式，仅清理数据）
         if all(col in header_dict for col in ["核减", "分管维护员", "区域"]):
             try:
-                wb.app.calculate()
-                data = ws.used_range.value
-                if not data or len(data) < 2:
-                    pass
-                else:
-                    df = pd.DataFrame(data[1:], columns=data[0])
-                    reduce_series = df["核减"].astype(str)
-                    mask = (df["核减"].notna() &
-                            (reduce_series.str.strip() != "") &
-                            (~reduce_series.str.startswith("#", na=False)))
-                    clear_count = mask.sum()
+                wb.app.calculate()  # 先计算所有公式
 
-                    if clear_count > 0:
-                        df.loc[mask, ["分管维护员", "区域"]] = ""
-                        print(f"✅ 网关数据 - 清理 {clear_count} 行核减相关数据")
+                # 读取当前数据（保留公式引用）
+                data_range = ws.used_range
+                df = pd.DataFrame(data_range.value[1:], columns=data_range.value[0])
+                reduce_series = df["核减"].astype(str)
 
-                        new_sheet_name = "网关总清单_核减清理"
-                        if new_sheet_name in [s.name for s in wb.sheets]:
-                            wb.sheets[new_sheet_name].delete()
-                        ws_new = wb.sheets.add(new_sheet_name, after=ws)
+                # 筛选需要清理的行
+                mask = (df["核减"].notna() &
+                        (reduce_series.str.strip() != "") &
+                        (~reduce_series.str.startswith("#", na=False)))
+                clear_count = mask.sum()
 
-                        num_cols = len(df.columns)
-                        header_orig = ws.range("A1").resize(column_size=num_cols)
-                        header_new = ws_new.range("A1").resize(column_size=num_cols)
-                        header_orig.copy()
-                        header_new.paste(paste="all")
+                if clear_count > 0:
+                    # 直接在原Sheet中清空指定列，不重建Sheet
+                    for row_idx in mask[mask].index:
+                        # 行号 = 数据行索引 + 2（表头行+起始行）
+                        row_num = row_idx + 2
+                        # 清空分管维护员、区域列，保留其他公式列
+                        if "分管维护员" in header_dict:
+                            ws.range((row_num, header_dict["分管维护员"])).value = ""
+                        if "区域" in header_dict:
+                            ws.range((row_num, header_dict["区域"])).value = ""
 
-                        code_column_names = ["设备编码", "站址资源编码"]
-                        for col_name in code_column_names:
-                            if col_name in df.columns:
-                                col_idx = df.columns.get_loc(col_name) + 1
-                                ws_new.range(ws_new.cells(2, col_idx),
-                                             ws_new.cells(df.shape[0] + 1, col_idx)).number_format = "@"
+                    print(f"✅ 网关数据 - 清理 {clear_count} 行核减相关数据（保留原Sheet+公式）")
 
-                        for col_name in code_column_names:
-                            if col_name in df.columns:
-                                df[col_name] = df[col_name].apply(
-                                    lambda x: f"'{x}" if (pd.notna(x) and str(x).strip() != "") else x
-                                )
-
-                        ws_new.range("A2").value = df.values
-
-                        backup_sheet_name = "网关总清单_备份"
-                        if backup_sheet_name in [s.name for s in wb.sheets]:
-                            wb.sheets[backup_sheet_name].delete()
-                        ws.name = backup_sheet_name
-                        ws.visible = False
-                        ws_new.name = "网关总清单"
+                    # 可选：备份清理前的数据（单独Sheet，不影响主Sheet）
+                    backup_sheet_name = "网关总清单_核减清理备份"
+                    if backup_sheet_name in [s.name for s in wb.sheets]:
+                        wb.sheets[backup_sheet_name].delete()
+                    ws_backup = wb.sheets.add(backup_sheet_name, after=ws)
+                    data_range.copy()
+                    ws_backup.range("A1").paste(paste="all")
+                    ws_backup.visible = False  # 备份Sheet隐藏
 
             except Exception as e:
                 print(f"⚠️ 核减清理处理失败：{e}")
