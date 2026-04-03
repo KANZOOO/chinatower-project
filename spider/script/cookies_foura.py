@@ -40,14 +40,14 @@ class KeepFourA:
         page.wait_for_timeout(2000)
         page.locator('.login_btn').click()
         page.wait_for_timeout(2000)
-        # page.evaluate("refreshMsg();")
-        # page.wait_for_timeout(15000)
+        page.evaluate("refreshMsg();")
+        page.wait_for_timeout(15000)
         success = False
         for attempt in range(5):
             try:
-                # yzm = requests.get(YZM_URL).text.strip()
-                # page.locator('#msgCode').fill(yzm)
-                # page.evaluate("doLogin();")
+                yzm = requests.get(YZM_URL).text.strip()
+                page.locator('#msgCode').fill(yzm)
+                page.evaluate("doLogin();")
                 page.wait_for_timeout(5000)
                 page.evaluate("gores('200007','20988','');")
                 success = True
