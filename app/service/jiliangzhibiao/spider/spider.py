@@ -12,12 +12,15 @@ from sqlalchemy import text
 from core.config import settings
 
 """
-合并完成版：统一Cookie、统一会话、所有请求共享一套登录信息
+合并完成版：统一 Cookie、统一会话、所有请求共享一套登录信息
+包含两个爬虫：
+1. 分流计量数据下载（双请求）
+2. 租户电流数据下载（9 个文件）- 来自原 model.py
 """
 
 # ===================== 全局统一配置（只改这里就行） =====================
 # 全局唯一 Cookie（所有请求共用）
-cookies_str = "route=73d99f9520cc61666c3e6505999568f9; JSESSIONID=943A5DFB9881030C46D94B24BD40B4F8; acctId=100852210; uid=dw.rj.fengsw; moduleUrl=/layout/index.xhtml; nodeInformation=172.29.105.18:all8280; BIGipServerywjk_new_pool1=42016172.10275.0000; Hm_lvt_f6097524da69abc1b63c9f8d19f5bd5b=1775023804; Hm_lpvt_f6097524da69abc1b63c9f8d19f5bd5b=1775023804; HMACCOUNT=4928EF137877E6D0; pwdaToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJSRVMiLCJpc3MiOiJXUzRBIiwiZXhwIjoxNzc1MDMyOTc5LCJOQU5PU0VDT05EIjoxMzU2ODg0Njc5MTY0NzQ2fQ.eI0To_mlECnerL7VOKYJSkj_GafxL4W5Zi434zg3SS8"
+cookies_str = "route=73d99f9520cc61666c3e6505999568f9; JSESSIONID=943A5DFB9881030C46D94B24BD40B4F8; acctId=100852210; uid=dw.rj.fengsw; moduleUrl=/layout/index.xhtml; nodeInformation=172.29.105.18:all8280; BIGipServerywjk_new_pool1=42016172.10275.0000; Hm_lvt_f6097524da69abc1b63c9f8d19f5bd5b=1775023804; HMACCOUNT=4928EF137877E6D0; Hm_lpvt_f6097524da69abc1b63c9f8d19f5bd5b=1775089977; pwdaToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJSRVMiLCJpc3MiOiJXUzRBIiwiZXhwIjoxNzc1MTIzOTc4LCJOQU5PU0VDT05EIjoxNDQ0NzcyNDYyMjIyMTA3fQ.GMvOaakiEbpYmBvKBf9Lo6YfrLXMP7dGHI8kSG9xnrU"
 
 # 全局统一请求头
 GLOBAL_HEADERS = {
@@ -36,7 +39,7 @@ GLOBAL_HEADERS = {
 
 # ===================== 通用工具函数 =====================
 def parse_cookie(cookie_str):
-    """解析Cookie字符串为字典（全局共用）"""
+    """解析 Cookie 字符串为字典（全局共用）"""
     cookies = {}
     try:
         for item in cookie_str.split(";"):
@@ -46,7 +49,7 @@ def parse_cookie(cookie_str):
             key, value = item.split("=", 1)
             cookies[key] = value
     except Exception as e:
-        print(f"Cookie解析失败: {e}")
+        print(f"Cookie 解析失败：{e}")
     return cookies
 
 GLOBAL_COOKIE_DICT = parse_cookie(cookies_str)
@@ -79,7 +82,7 @@ def requests_get(url, headers=GLOBAL_HEADERS, params={}, cookies=GLOBAL_COOKIE_D
 
 def xlsx_to_csv(folder):
     if not os.path.exists(folder):
-        print(f"文件夹不存在: {folder}")
+        print(f"文件夹不存在：{folder}")
         return
     for file in os.listdir(folder):
         path = os.path.join(folder, file)
@@ -88,7 +91,7 @@ def xlsx_to_csv(folder):
             if not os.path.exists(csv_path):
                 try:
                     Xlsx2csv(path, outputencoding="utf-8").convert(csv_path)
-                    print(f"转换完成: {file}")
+                    print(f"转换完成：{file}")
                 except Exception as e:
                     print(f"转换失败 {file}: {e}")
 
@@ -114,7 +117,12 @@ def concat_df(folder, output_path, gen_csv=False):
         merge_df.to_csv(str(output_path).replace('.xlsx','.csv'), index=False, encoding='utf-8-sig')
     return merge_df, output_path
 
+# ===================== 爬虫逻辑 1：通用文件下载（用于租户电流数据） =====================
 def down_file(url, data, path, conten_len_error=3000, xlsx_juge=False):
+    """
+    下载文件，支持重试机制和文件验证
+    用于下载 9 个租户电流文件
+    """
     retry_count = 3
     while retry_count >= 0:
         try:
@@ -137,11 +145,11 @@ def down_file(url, data, path, conten_len_error=3000, xlsx_juge=False):
                         raise ValueError("内容过小")
                     if xlsx_juge:
                         if not res.content.startswith((b'\x50\x4B\x03\x04', b'\x09\x08\x04\x00\x10\x00\x00\x00')):
-                            raise ValueError("非Excel文件")
+                            raise ValueError("非 Excel 文件")
                     os.makedirs(os.path.dirname(path), exist_ok=True)
                     with open(path, "wb") as f:
                         f.write(res.content)
-                    print(f"✅ 下载成功: {path}")
+                    print(f"✅ 下载成功：{path}")
             return
         except ValueError as e:
             retry_count -= 1
@@ -149,9 +157,13 @@ def down_file(url, data, path, conten_len_error=3000, xlsx_juge=False):
                 raise
             print(f"重试中... {e}")
 
-# ===================== 分流计量下载（双请求） =====================
+# ===================== 爬虫逻辑 2：分流计量下载（双请求） =====================
 def download_shunt_meter_excel():
-    save_path = settings.resolve_path(r"app/service/jiliangzhibiao/data/分流计量数据.xlsx")
+    """
+    下载分流计量数据 Excel 文件（双请求模式）
+    Returns: 保存的文件路径
+    """
+    save_path = settings.resolve_path(r"app/service/jiliangzhibiao/down/分流计量数据.xls")
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     data1 = {
@@ -178,7 +190,7 @@ def download_shunt_meter_excel():
     resp1 = session.post(url1, data=data1, timeout=30)
     resp1.raise_for_status()
 
-    print("正在导出Excel...")
+    print("正在导出 Excel...")
     url2 = "http://omms.chinatowercom.cn:9000/devMge/exportSMDataExcel.go?ids=1"
     resp2 = session.get(url2, stream=True, timeout=60)
     resp2.raise_for_status()
@@ -187,7 +199,7 @@ def download_shunt_meter_excel():
         for chunk in resp2.iter_content(1024*1024):
             f.write(chunk)
 
-    print(f"\n✅ 分流计量Excel下载完成：{save_path}")
+    print(f"\n✅ 分流计量 Excel 下载完成：{save_path}")
     return save_path
 
 # ===================== 主入口 =====================
@@ -198,4 +210,4 @@ if __name__ == "__main__":
 
 
     except Exception as e:
-        print(f"\n❌ 执行失败: {e}")
+        print(f"\n❌ 执行失败：{e}")
