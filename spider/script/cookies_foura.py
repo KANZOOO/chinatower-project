@@ -1,4 +1,10 @@
 import datetime
+import sys
+import os
+
+# 添加项目根目录到Python搜索路径
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
+
 from playwright.sync_api import sync_playwright
 from core.sql import sql_orm
 import requests

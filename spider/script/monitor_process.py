@@ -358,6 +358,257 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
                 pass
 
 
+def update_camera_offline_list(target_excel_path):
+    """
+    更新摄像头离线清单
+    1. 从边缘网关表匹配设备编码到边缘摄像头表
+    2. 处理匹配到的数据，保留7个字段并增加7个字段
+    3. 筛选设备当前状态为离线的数据
+    4. 为新增字段设置公式
+    """
+    # 1. 确定文件路径
+    gateway_xlsx_path = settings.resolve_path("spider/script/station/down/边缘网关.xlsx")
+    gateway_xls_path = os.path.splitext(gateway_xlsx_path)[0] + ".xls"
+    gateway_raw_path = gateway_xlsx_path if os.path.exists(gateway_xlsx_path) else gateway_xls_path
+    
+    camera_xlsx_path = settings.resolve_path("spider/script/station/down/边缘摄像头.xlsx")
+    camera_xls_path = os.path.splitext(camera_xlsx_path)[0] + ".xls"
+    camera_raw_path = camera_xlsx_path if os.path.exists(camera_xlsx_path) else camera_xls_path
+    
+    if not os.path.exists(gateway_raw_path):
+        print(f"❌ 边缘网关文件不存在")
+        return
+    
+    if not os.path.exists(camera_raw_path):
+        print(f"❌ 边缘摄像头文件不存在")
+        return
+    
+    if not os.path.exists(target_excel_path):
+        print(f"❌ 目标模板不存在")
+        return
+    
+    # 2. 加载数据
+    df_gateway = load_excel_data(gateway_raw_path)
+    df_camera = load_excel_data(camera_raw_path)
+    
+    if df_gateway.empty or df_camera.empty:
+        print("❌ 数据加载失败")
+        return
+    
+    # 3. 匹配数据：边缘网关表的设备编码匹配到边缘摄像头表
+    gateway_codes = set(df_gateway["设备编码"].astype(str).str.strip())
+    df_camera["设备编码"] = df_camera["设备编码"].astype(str).str.strip()
+    df_matched = df_camera[df_camera["设备编码"].isin(gateway_codes)].copy()
+    
+    print(f"✅ 匹配完成：共 {len(df_matched)} 行数据")
+    
+    # 4. 保留7个字段
+    keep_fields = ["设备编码", "设备名称", "通道当前状态", "通道最近离线时间", "摄像头安装位置", "站址名称", "站址资源编码"]
+    for field in keep_fields:
+        if field not in df_matched.columns:
+            df_matched[field] = ""
+    
+    df_processed = df_matched[keep_fields].copy()
+    
+    # 5. 筛选通道当前状态为离线的数据
+    if "通道当前状态" in df_processed.columns:
+        df_processed = df_processed[df_processed["通道当前状态"] == "离线"]
+        print(f"✅ 筛选完成：只保留 {len(df_processed)} 行离线数据")
+    
+    data_rows = len(df_processed)
+    if data_rows == 0:
+        print("⚠️ 没有离线摄像头数据")
+        return
+    
+    # 6. 使用xlwings更新摄像头离线清单
+    app = None
+    wb = None
+    
+    try:
+        app = xw.App(visible=False, add_book=False)
+        wb = app.books.open(target_excel_path)
+        wb.display_alerts = False
+        wb.screen_updating = False
+        
+        # 7. 检查摄像头离线清单Sheet是否存在
+        sheet_name = "摄像头离线清单"
+        if sheet_name not in [s.name for s in wb.sheets]:
+            print(f"❌ 目标Sheet「{sheet_name}」不存在")
+            return
+        
+        ws = wb.sheets[sheet_name]
+        
+        # 8. 清空数据但保留表头
+        start_row = 2
+        last_row = ws.cells.last_cell.row
+        if last_row >= start_row:
+            ws.range(f"A{start_row}:ZZ{last_row}").clear_contents()
+            print("✅ 数据清空完成，保留表头")
+        
+        # 9. 获取表头信息
+        header_range = ws.range("1:1").value
+        header_dict = {col: idx + 1 for idx, col in enumerate(header_range) if col}
+        
+        # 10. 批量写入数据
+        for field in keep_fields:
+            if field in header_dict:
+                col_idx = header_dict[field]
+                col_data = df_processed[field].tolist()
+                ws.range((2, col_idx), (data_rows + 1, col_idx)).value = [[val] for val in col_data]
+        print(f"✅ 数据写入完成：{data_rows}行")
+        
+        # 11. 生成公式字段
+        # 11.1 离线天数公式
+        if "离线天数" in header_dict and "通道最近离线时间" in header_dict:
+            offline_days_col = header_dict["离线天数"]
+            recent_offline_col = header_dict["通道最近离线时间"]
+            # 获取通道最近离线时间列的字母
+            recent_offline_col_letter = ws.range((1, recent_offline_col)).address.replace("$1", "").replace("$", "")
+            # 生成公式（使用相对引用）
+            formula = f'=IF({recent_offline_col_letter}2="","",TODAY()-INT({recent_offline_col_letter}2))'
+            # 先设置第一个单元格的公式
+            ws.range((2, offline_days_col)).formula = formula
+            # 然后填充到整个列
+            if data_rows > 1:
+                ws.range((2, offline_days_col)).autofill(ws.range((2, offline_days_col), (data_rows + 1, offline_days_col)))
+            print("✅ 离线天数公式生成完成")
+        
+        # 11.2 区域公式
+        if "区域" in header_dict:
+            area_col = header_dict["区域"]
+            # 固定使用B列
+            formula = f'=VLOOKUP(B2,摄像头总清单!B:K,8,0)'
+            # 先设置第一个单元格的公式
+            ws.range((2, area_col)).formula = formula
+            # 然后填充到整个列
+            if data_rows > 1:
+                ws.range((2, area_col)).autofill(ws.range((2, area_col), (data_rows + 1, area_col)))
+            print("✅ 区域公式生成完成")
+        
+        # 11.3 网关在线情况公式
+        if "网关在线情况" in header_dict and "设备编码" in header_dict:
+            gateway_status_col = header_dict["网关在线情况"]
+            code_col = header_dict["设备编码"]
+            # 获取设备编码列的字母
+            code_col_letter = ws.range((1, code_col)).address.replace("$1", "").replace("$", "")
+            # 生成公式（使用相对引用）
+            formula = f'=IF(ISNA(VLOOKUP({code_col_letter}2,网关离线清单!A:A,1,0)),"在线","网关离线")'
+            # 先设置第一个单元格的公式
+            ws.range((2, gateway_status_col)).formula = formula
+            # 然后填充到整个列
+            if data_rows > 1:
+                ws.range((2, gateway_status_col)).autofill(ws.range((2, gateway_status_col), (data_rows + 1, gateway_status_col)))
+            print("✅ 网关在线情况公式生成完成")
+        
+        # 11.4 是否代维处理公式
+        if "是否代维处理" in header_dict and "设备编码" in header_dict:
+            dv_col = header_dict["是否代维处理"]
+            code_col = header_dict["设备编码"]
+            # 获取设备编码列的字母
+            code_col_letter = ws.range((1, code_col)).address.replace("$1", "").replace("$", "")
+            # 生成公式（使用相对引用）
+            formula = f'=VLOOKUP({code_col_letter}2,摄像头总清单!$A$2:$L$44393,12,0)'
+            # 先设置第一个单元格的公式
+            ws.range((2, dv_col)).formula = formula
+            # 然后填充到整个列
+            if data_rows > 1:
+                ws.range((2, dv_col)).autofill(ws.range((2, dv_col), (data_rows + 1, dv_col)))
+            print("✅ 是否代维处理公式生成完成")
+        
+        # 11.5 分管维护员公式
+        if "分管维护员" in header_dict:
+            leader_col = header_dict["分管维护员"]
+            # 固定使用B列
+            formula = f'=VLOOKUP(B2,摄像头总清单!B:K,9,0)'
+            # 先设置第一个单元格的公式
+            ws.range((2, leader_col)).formula = formula
+            # 然后填充到整个列
+            if data_rows > 1:
+                ws.range((2, leader_col)).autofill(ws.range((2, leader_col), (data_rows + 1, leader_col)))
+            print("✅ 分管维护员公式生成完成")
+        
+        # 11.6 临时入网实际安装站公式
+        if "临时入网实际安装站" in header_dict and "设备编码" in header_dict:
+            temp_site_col = header_dict["临时入网实际安装站"]
+            code_col = header_dict["设备编码"]
+            # 获取设备编码列的字母
+            code_col_letter = ws.range((1, code_col)).address.replace("$1", "").replace("$", "")
+            # 生成公式（使用相对引用）
+            formula = f'=VLOOKUP({code_col_letter}2,摄像头总清单!$A$2:$G$44393,7,0)'
+            # 先设置第一个单元格的公式
+            ws.range((2, temp_site_col)).formula = formula
+            # 然后填充到整个列
+            if data_rows > 1:
+                ws.range((2, temp_site_col)).autofill(ws.range((2, temp_site_col), (data_rows + 1, temp_site_col)))
+            print("✅ 临时入网实际安装站公式生成完成")
+        
+        # 11.7 备注公式
+        if "备注" in header_dict and "设备编码" in header_dict:
+            remark_col = header_dict["备注"]
+            code_col = header_dict["设备编码"]
+            # 获取设备编码列的字母
+            code_col_letter = ws.range((1, code_col)).address.replace("$1", "").replace("$", "")
+            # 生成公式（使用相对引用）
+            formula = f'=VLOOKUP({code_col_letter}2,核减清单!$A$1:$C$10537,3,0)'
+            # 先设置第一个单元格的公式
+            ws.range((2, remark_col)).formula = formula
+            # 然后填充到整个列
+            if data_rows > 1:
+                ws.range((2, remark_col)).autofill(ws.range((2, remark_col), (data_rows + 1, remark_col)))
+            print("✅ 备注公式生成完成")
+        
+        # 11.8 片区公式
+        if "片区" in header_dict:
+            region_col = header_dict["片区"]
+            # 固定使用B列
+            formula = f'=VLOOKUP(B2,摄像头总清单!B:K,10,0)'
+            # 先设置第一个单元格的公式
+            ws.range((2, region_col)).formula = formula
+            # 然后填充到整个列
+            if data_rows > 1:
+                ws.range((2, region_col)).autofill(ws.range((2, region_col), (data_rows + 1, region_col)))
+            print("✅ 片区公式生成完成")
+        
+        # 11.9 考核核减公式
+        if "考核核减" in header_dict and "备注" in header_dict:
+            check_col = header_dict["考核核减"]
+            remark_col = header_dict["备注"]
+            # 获取备注列的字母
+            remark_col_letter = ws.range((1, remark_col)).address.replace("$1", "").replace("$", "")
+            # 生成公式（使用相对引用）
+            formula = f'=IF({remark_col_letter}2="","","核减")'
+            # 先设置第一个单元格的公式
+            ws.range((2, check_col)).formula = formula
+            # 然后填充到整个列
+            if data_rows > 1:
+                ws.range((2, check_col)).autofill(ws.range((2, check_col), (data_rows + 1, check_col)))
+            print("✅ 考核核减公式生成完成")
+        
+        # 12. 强制文本格式，防止科学计数法
+        force_all_sheets_text_format(wb)
+        
+        # 13. 保存并关闭
+        wb.app.calculate()
+        wb.screen_updating = True
+        wb.save()
+        print(f"\n🎉 摄像头离线清单更新完成！共处理 {data_rows} 行数据")
+        
+    except Exception as e:
+        print(f"❌ xlwings更新数据失败：{e}")
+    finally:
+        if wb:
+            try:
+                wb.close()
+            except:
+                pass
+        if app:
+            try:
+                app.quit()
+                app.kill()
+            except:
+                pass
+
+
 def process_camera_main_list():
     camera_xlsx_path = settings.resolve_path("spider/script/station/down/边缘摄像头.xlsx")
     camera_xls_path = os.path.splitext(camera_xlsx_path)[0] + ".xls"
@@ -378,5 +629,9 @@ def process_camera_main_list():
         sheet_name="摄像头总清单",
         df_updated=df_updated
     )
+    update_camera_offline_list(target_excel_path)
+
+
 if __name__ == '__main__':
     process_camera_main_list()
+    process_camera_offline_list()
