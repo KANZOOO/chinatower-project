@@ -402,13 +402,11 @@ def update_gateway_offline_list():
     # 5. 筛选只保留设备当前状态为离线的行
     if "设备当前状态" in df_gateway.columns:
         df_gateway = df_gateway[df_gateway["设备当前状态"] == "离线"]
-        print(f"✅ 筛选完成：只保留 {len(df_gateway)} 行离线设备数据")
     else:
         print("⚠️ 设备当前状态字段不存在")
 
     df_updated = df_gateway[required_fields].copy()
     data_rows = len(df_updated)
-    print(f"✅ 边缘网关数据预处理完成：有效数据{data_rows}行")
 
     # 6. 使用xlwings更新网关离线清单
     app = None
@@ -436,7 +434,6 @@ def update_gateway_offline_list():
         last_row = ws.cells.last_cell.row
         if last_row >= start_row:
             ws.range(f"A{start_row}:ZZ{last_row}").clear_contents()
-            print("✅ 数据清空完成，保留表头")
 
         if data_rows > 0:
             # 9. 获取表头信息
@@ -466,7 +463,6 @@ def update_gateway_offline_list():
                 col_data = df_updated[field].tolist()
                 # 批量写入整列数据
                 ws.range((2, col_idx), (data_rows + 1, col_idx)).value = [[val] for val in col_data]
-            print(f"✅ 数据写入完成：{data_rows}行")
 
             # 11. 生成公式字段
             # 11.1 离线天数公式
@@ -477,13 +473,11 @@ def update_gateway_offline_list():
                 first_offline_cell = ws.range((2, recent_offline_col)).address.replace("$", "")
                 formula = f'=IF({first_offline_cell}="","",TODAY()-INT({first_offline_cell}))'
                 formula_range.formula = formula
-                print("✅ 离线天数公式生成完成")
 
             # 11.2 是否代维处理公式
             if "是否代维处理" in header_dict:
                 dv_col = header_dict["是否代维处理"]
                 ws.range((2, dv_col), (data_rows + 1, dv_col)).value = "是"
-                print("✅ 是否代维处理字段填充完成")
 
             # 11.3 分管维护员公式
             if "分管维护员" in header_dict and "所属站址名称" in header_dict:
@@ -493,7 +487,6 @@ def update_gateway_offline_list():
                 first_site_cell = ws.range((2, site_col)).address.replace("$", "")
                 formula = f'=VLOOKUP({first_site_cell},数据源!V:Z,3,0)'
                 formula_range.formula = formula
-                print("✅ 分管维护员公式生成完成")
 
             # 11.4 临时入网实际安装站公式
             if "临时入网实际安装站" in header_dict and "设备编码" in header_dict:
@@ -503,7 +496,6 @@ def update_gateway_offline_list():
                 first_code_cell = ws.range((2, code_col)).address.replace("$", "")
                 formula = f'=VLOOKUP({first_code_cell},数据源!N:P,3,0)'
                 formula_range.formula = formula
-                print("✅ 临时入网实际安装站公式生成完成")
 
             # 11.5 备注字段公式
             if "备注" in header_dict and "设备编码" in header_dict:
@@ -513,7 +505,6 @@ def update_gateway_offline_list():
                 first_code_cell = ws.range((2, code_col)).address.replace("$", "")
                 formula = f'=VLOOKUP({first_code_cell},核减清单!$A$2:$C$537,3,0)'
                 formula_range.formula = formula
-                print("✅ 备注字段公式生成完成")
 
             # 11.6 片区公式
             if "片区" in header_dict and "所属站址名称" in header_dict:
@@ -523,7 +514,6 @@ def update_gateway_offline_list():
                 first_site_cell = ws.range((2, site_col)).address.replace("$", "")
                 formula = f'=VLOOKUP({first_site_cell},数据源!V:Z,5,0)'
                 formula_range.formula = formula
-                print("✅ 片区公式生成完成")
 
             # 11.7 考核核减公式
             if "考核核减" in header_dict and "备注" in header_dict:
@@ -533,7 +523,6 @@ def update_gateway_offline_list():
                 first_remark_cell = ws.range((2, remark_col)).address.replace("$", "")
                 formula = f'=IF({first_remark_cell}="","","核减")'
                 formula_range.formula = formula
-                print("✅ 考核核减公式生成完成")
 
             # 11.8 是否超7天公式
             if "是否超7天" in header_dict and "离线天数" in header_dict:
@@ -543,7 +532,6 @@ def update_gateway_offline_list():
                 first_offline_days_cell = ws.range((2, offline_days_col)).address.replace("$", "")
                 formula = f'=IF({first_offline_days_cell}="","",IF({first_offline_days_cell}>=7,"是","否"))'
                 formula_range.formula = formula
-                print("✅ 是否超7天公式生成完成")
 
         # 批量恢复所有非网关离线清单sheet公式
         batch_restore_all_sheets_formulas(wb, formula_backup, exclude_sheet="网关离线清单")
