@@ -144,15 +144,7 @@ def update_gateway_sheet_with_xlwings(target_excel_path, sheet_name, df_updated)
         wb = app.books.open(target_excel_path)
         wb.display_alerts = False
         wb.screen_updating = False
-
-        # ==============================================
-        # 1. 批量备份所有非网关公式
-        # ==============================================
         formula_backup = batch_backup_all_sheets_formulas(wb, exclude_sheet=sheet_name)
-
-        # ==============================================
-        # 2. 【终极修复】执行前：全表强制文本格式（防科学计数法）
-        # ==============================================
         force_all_sheets_text_format(wb)
 
         # 以下是你原来的所有逻辑，一行不改！！！

@@ -81,12 +81,11 @@ def schedule_loop():
 
 
 if __name__ == '__main__':
-    main()
-    # try:
-    #      schedule_loop()
-    # except KeyboardInterrupt:
-    #     print("\n\n👋 调度器已停止运行")
-    # except Exception as e:
-    #     print(f"\n❌ 调度器异常终止：{e}")
-    #     import traceback
-    #     traceback.print_exc()
+    try:
+         schedule_loop()
+    except KeyboardInterrupt:
+        print("\n\n👋 调度器已停止运行")
+    except Exception as e:
+        print(f"\n❌ 调度器异常终止：{e}")
+        import traceback
+        traceback.print_exc()
