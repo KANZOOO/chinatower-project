@@ -107,7 +107,7 @@ def batch_restore_all_sheets_formulas(wb, backup, exclude_sheet="网关总清单
         print(f"⚠️ 批量恢复失败：{e}")
 
 # ===================== 【终极修复】强制所有Sheet设备编码列=文本格式（消灭科学计数法） =====================
-def force_all_sheets_text_format(wb, key_columns=["设备编码", "站址资源编码", "设备编号"]):
+def force_all_sheets_text_format(wb, key_columns=["设备编码", "站址资源编码", "设备编号","入网设备编码","站址编码"]):
     """
     强制整个Excel所有Sheet的关键字段为【文本格式】
     彻底杜绝科学计数法，确保VLOOKUP永远匹配成功
@@ -448,6 +448,17 @@ def update_gateway_offline_list():
                 if field not in header_dict:
                     print(f"❌ 表头中缺少字段：{field}")
                     return
+            
+            # 检查公式字段是否存在
+            formula_fields = ["离线天数", "是否代维处理", "分管维护员", "临时入网实际安装站", "备注", "片区", "考核核减", "是否超7天"]
+            missing_fields = []
+            for field in formula_fields:
+                if field not in header_dict:
+                    missing_fields.append(field)
+            
+            if missing_fields:
+                print(f"⚠️ 表头中缺少以下公式字段：{', '.join(missing_fields)}")
+                # 继续执行，只生成存在字段的公式
 
             # 10. 批量写入数据
             for field in required_fields:
@@ -530,7 +541,7 @@ def update_gateway_offline_list():
                 offline_days_col = header_dict["离线天数"]
                 formula_range = ws.range((2, over7_col), (data_rows + 1, over7_col))
                 first_offline_days_cell = ws.range((2, offline_days_col)).address.replace("$", "")
-                formula = f'=IF({first_offline_days_cell}="","",IF({first_offline_days_cell}>=7,"是",""))'
+                formula = f'=IF({first_offline_days_cell}="","",IF({first_offline_days_cell}>=7,"是","否"))'
                 formula_range.formula = formula
                 print("✅ 是否超7天公式生成完成")
 

@@ -127,7 +127,7 @@ def batch_restore_all_sheets_formulas(wb, backup, exclude_sheet="摄像头总清
 
 
 # ===================== 【终极修复】强制所有Sheet设备编码列=文本格式（消灭科学计数法） =====================
-def force_all_sheets_text_format(wb, key_columns=["设备编码", "站址资源编码", "设备编号", "编号"]):
+def force_all_sheets_text_format(wb, key_columns=["设备编码", "站址资源编码", "设备编号","入网设备编码","站址编码","编号"]):
     """
     强制整个Excel所有Sheet的关键字段为【文本格式】
     彻底杜绝科学计数法，确保VLOOKUP永远匹配成功
@@ -583,7 +583,16 @@ def update_camera_offline_list(target_excel_path):
             if data_rows > 1:
                 ws.range((2, check_col)).autofill(ws.range((2, check_col), (data_rows + 1, check_col)))
             print("✅ 考核核减公式生成完成")
-        
+                    # 11.10 是否超7天公式
+            if "是否超7天" in header_dict and "离线天数" in header_dict:
+                over7_col = header_dict["是否超7天"]
+                offline_days_col = header_dict["离线天数"]
+                formula_range = ws.range((2, over7_col), (data_rows + 1, over7_col))
+                first_offline_days_cell = ws.range((2, offline_days_col)).address.replace("$", "")
+                formula = f'=IF({first_offline_days_cell}="","",IF({first_offline_days_cell}>=7,"是","否"))'
+                formula_range.formula = formula
+                print("✅ 是否超7天公式生成完成")
+
         # 12. 强制文本格式，防止科学计数法
         force_all_sheets_text_format(wb)
         
