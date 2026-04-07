@@ -43,7 +43,7 @@ class ZhiLianTongBao:
 
 def main():
     zhi_lian_tongbao = ZhiLianTongBao()
-    # zhi_lian_tongbao.run_down()
+    zhi_lian_tongbao.run_down()
     zhi_lian_tongbao.process()
 
 
