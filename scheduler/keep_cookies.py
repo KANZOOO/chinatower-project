@@ -25,8 +25,8 @@ def refresh_all_cookies():
 def schedule_loop():
     """主调度循环"""
     print("循环开始")
-    # 每6小时强制重新登录所有账号，刷新cookie
-    schedule.every(6).hours.do(
+    # 每天早上7点30分强制重新登录所有账号，刷新cookie
+    schedule.every().day.at("07:30").do(
         run_task_in_thread,
         refresh_all_cookies,
         "更新-运监cookies"

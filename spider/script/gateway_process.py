@@ -425,11 +425,12 @@ def process_gateway_main_list():
         return
 
     df_updated = preprocess_gateway_data(gateway_raw_path)
-    update_gateway_sheet_with_xlwings(
+    update_success = update_gateway_sheet_with_xlwings(
         target_excel_path=target_excel_path,
         sheet_name="网关总清单",
         df_updated=df_updated
     )
+    return update_success
 
 
 def update_gateway_offline_list():

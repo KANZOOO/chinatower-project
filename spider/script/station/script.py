@@ -44,7 +44,7 @@ class ZhiLianTongBao:
 def main():
     zhi_lian_tongbao = ZhiLianTongBao()
     zhi_lian_tongbao.run_down()
-    # zhi_lian_tongbao.process()
+    zhi_lian_tongbao.process()
 
 
 def run_task_in_thread(task_func, task_name):
@@ -74,6 +74,7 @@ def schedule_loop():
         run_task_in_thread,
         zhi_lian_tongbao.main_task,
         "每天 8 点运行脚本"
+        # "数据下载"
     )
     while True:
         schedule.run_pending()
@@ -81,11 +82,6 @@ def schedule_loop():
 
 
 if __name__ == '__main__':
-    try:
-         schedule_loop()
-    except KeyboardInterrupt:
-        print("\n\n👋 调度器已停止运行")
-    except Exception as e:
-        print(f"\n❌ 调度器异常终止：{e}")
-        import traceback
-        traceback.print_exc()
+    main()
+    schedule_loop()
+

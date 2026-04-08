@@ -537,12 +537,13 @@ def process_camera_main_list():
         return
 
     df_updated = preprocess_camera_data(camera_raw_path)
-    update_camera_sheet_with_xlwings(
+    update_success = update_camera_sheet_with_xlwings(
         target_excel_path=target_excel_path,
         sheet_name="摄像头总清单",
         df_updated=df_updated
     )
     update_camera_offline_list(target_excel_path)
+    return update_success
 
 
 # 修复原代码中重复调用的问题
