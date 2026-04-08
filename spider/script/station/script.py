@@ -44,7 +44,7 @@ class ZhiLianTongBao:
 def main():
     zhi_lian_tongbao = ZhiLianTongBao()
     zhi_lian_tongbao.run_down()
-    zhi_lian_tongbao.process()
+    # zhi_lian_tongbao.process()
 
 
 def run_task_in_thread(task_func, task_name):
