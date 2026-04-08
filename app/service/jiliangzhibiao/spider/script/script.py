@@ -66,8 +66,7 @@ class Jiliangzhibiao:
 def main():
     ji_liang_zhibiao= Jiliangzhibiao()
     ji_liang_zhibiao.run_down()
-    ji_liang_zhibiao.process()
     download_shunt_meter_excel()
-
+    ji_liang_zhibiao.process()
 if __name__ == '__main__':
     main()

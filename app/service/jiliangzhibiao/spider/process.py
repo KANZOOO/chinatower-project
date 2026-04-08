@@ -57,14 +57,14 @@ def set_column_text_format(sheet, col_names, header_row=1):
     except:
         pass
 
-def kill_excel_wps_processes():
-    """清理Excel/WPS进程，避免占用"""
-    try:
-        os.system("killall -9 'Microsoft Excel' > /dev/null 2>&1")
-        os.system("killall -9 'WPS Office' > /dev/null 2>&1")
-        os.system("killall -9 'wps' > /dev/null 2>&1")
-    except:
-        pass
+# def kill_excel_wps_processes():
+#     """清理Excel/WPS进程，避免占用"""
+#     try:
+#         os.system("killall -9 'Microsoft Excel' > /dev/null 2>&1")
+#         os.system("killall -9 'WPS Office' > /dev/null 2>&1")
+#         os.system("killall -9 'wps' > /dev/null 2>&1")
+#     except:
+#         pass
 
 def get_excel_app():
     """Mac 专用：配置 xlwings 使用正确的 Excel 路径"""
@@ -94,7 +94,7 @@ def process_device_list():
     today_str = datetime.now().strftime("%Y/%m/%d")
     print(f"🚀 开始处理 - {today_str}")
 
-    kill_excel_wps_processes()
+    # kill_excel_wps_processes()
 
     try:
         # 文件检查
@@ -208,9 +208,8 @@ def process_device_list():
                 app.quit()
         except:
             pass
-        kill_excel_wps_processes()
         return False
 
 if __name__ == '__main__':
-    kill_excel_wps_processes()
+
     process_device_list()
