@@ -57,12 +57,47 @@ def set_column_text_format(sheet, col_names, header_row=1):
     except:
         pass
 
+def kill_excel_wps_processes():
+    """清理Excel/WPS进程，避免占用"""
+    try:
+        os.system("killall -9 'Microsoft Excel' > /dev/null 2>&1")
+        os.system("killall -9 'WPS Office' > /dev/null 2>&1")
+        os.system("killall -9 'wps' > /dev/null 2>&1")
+    except:
+        pass
+
+def get_excel_app():
+    """Mac 专用：配置 xlwings 使用正确的 Excel 路径"""
+    app = None
+    try:
+        # 设置 xlwings 后端和 Excel 路径
+        import os
+        os.environ['XLWINGS_BACKEND'] = 'apple'
+        
+        # 显式指定 Excel 应用路径（如果需要）
+        # xlwings 会自动查找 /Applications/Microsoft Excel.app
+        
+        app = xw.App(visible=False, add_book=False)
+        app.display_alerts = False
+        app.screen_updating = False
+        return app
+    except Exception as e:
+        print(f"⚠️ 启动失败: {str(e)}")
+        if app:
+            try:
+                app.quit()
+            except:
+                pass
+        return None
+
 def process_device_list():
     today_str = datetime.now().strftime("%Y/%m/%d")
     print(f"🚀 开始处理 - {today_str}")
 
+    kill_excel_wps_processes()
+
     try:
-        # 检查文件
+        # 文件检查
         for f in [CONFIG["source_excel"], CONFIG["target_excel"]]:
             if not os.path.exists(f):
                 print(f"❌ 文件不存在：{f}")
@@ -72,25 +107,25 @@ def process_device_list():
             print("❌ 源文件超过24小时未更新")
             return False
 
-        # ========== Mac 专用：修复 xlwings 启动方式 ==========
-        app = xw.App(visible=False, add_book=False)
-        app.display_alerts = False
-        app.screen_updating = False
+        # 启动
+        app = get_excel_app()
+        if not app:
+            print("❌ 办公软件启动失败")
+            return False
 
-        # 打开目标文件（修复参数错误）
-        wb_target = app.books.open(CONFIG["target_excel"], update_links=False)
-
-        # 读取 xls 源文件（防科学计数法）
+        # 读取源文件
         dtype = {c: str for c in CONFIG["text_format_cols"]}
         df_source = pd.read_excel(CONFIG["source_excel"], header=1, dtype=dtype)
         df_source = df_source.fillna("").astype(str).apply(lambda x: x.str.strip() if x.dtype == "object" else x)
 
-        # 获取 sheet
+        # 打开目标文件
+        wb_target = app.books.open(CONFIG["target_excel"])
+
+        # ===================== 核心处理 =====================
         sht_list = wb_target.sheets["清单"]
         sht_yesterday = wb_target.sheets["昨日数据"]
         sht_today = wb_target.sheets["今日数据"]
 
-        # 设置文本格式
         for sh in [sht_list, sht_yesterday, sht_today]:
             set_column_text_format(sh, CONFIG["text_format_cols"])
 
@@ -163,16 +198,19 @@ def process_device_list():
         wb_target.close()
         app.quit()
 
-        print("\n✅ 处理完成！无科学计数法，兼容 xls，Mac 稳定运行")
+        print("\n✅ 处理完成！兼容Mac WPS")
         return True
 
     except Exception as e:
         print(f"\n❌ 失败：{str(e)}")
         try:
-            app.quit()
+            if 'app' in locals() and app:
+                app.quit()
         except:
             pass
+        kill_excel_wps_processes()
         return False
 
 if __name__ == '__main__':
+    kill_excel_wps_processes()
     process_device_list()
