@@ -163,7 +163,7 @@ def download_shunt_meter_excel():
     下载分流计量数据 Excel 文件（双请求模式）
     Returns: 保存的文件路径
     """
-    save_path = settings.resolve_path(r"app/service/jiliangzhibiao/down/分流计量数据.xls")
+    save_path = settings.resolve_path(r"app/service/jiliangzhibiao/down/分路计量设备清单.xls")
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     data1 = {
