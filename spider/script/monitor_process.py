@@ -292,8 +292,6 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
         wb.app.calculate()
         wb.screen_updating = True
         wb.save()
-
-        print(f"✅ 摄像头总清单处理完成：{data_rows} 行")
         return True
 
     except Exception as e:
@@ -504,7 +502,7 @@ def update_camera_offline_list(target_excel_path):
         wb.app.calculate()
         wb.screen_updating = True
         wb.save()
-        print(f"✅ 摄像头离线清单处理完成：{data_rows} 行")
+        print(f"✅ 摄像头数据处理完成")
 
     except Exception as e:
         print(f"❌ 离线清单更新失败：{e}")

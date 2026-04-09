@@ -20,7 +20,7 @@ from core.config import settings
 
 # ===================== 全局统一配置（只改这里就行） =====================
 # 全局唯一 Cookie（所有请求共用）
-cookies_str = "Hm_lvt_f6097524da69abc1b63c9f8d19f5bd5b=1774852953,1774919641; route=6c897347893b9545ee3f0b2f0d93e563; ULTRA_U_K=; JSESSIONID=257293F79E016102FDC4904A4E538869; pwdaToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJSRVMiLCJpc3MiOiJXUzRBIiwiZXhwIjoxNzc1NjQyMDYxLCJOQU5PU0VDT05EIjoxMjY0MDM0NTY1MjAyNjQwMH0.TJAd_0dDNnxrR0CFpAxX1HuWW59VlTkqdhA2BVA_7HY; acctId=100852210; uid=dw.rj.fengsw; moduleUrl=/layout/index.xhtml; nodeInformation=172.29.105.50:all8380; BIGipServerywjk_new_pool1=42016172.10275.0000"
+cookies_str = "Hm_lvt_f6097524da69abc1b63c9f8d19f5bd5b=1774852953,1774919641; BIGipServerywjk_new_pool1=276897196.10275.0000; route=215279fc29de0b8285eb97c19dea1736; JSESSIONID=D9E4F6C2740CA788CDF75D6D7AA7F6B9; pwdaToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJSRVMiLCJpc3MiOiJXUzRBIiwiZXhwIjoxNzc1NzAzMTE2LCJOQU5PU0VDT05EIjoxNDQwOTY0Mjc5ODY3MTgyOX0.0SUjcIpulgnM1hWBU5-iu7m6TcwX7ssYWW5OeATI4a8; acctId=100852210; uid=dw.rj.fengsw; moduleUrl=/layout/index.xhtml; nodeInformation=172.29.105.19:all8480"
 
 # 全局统一请求头
 GLOBAL_HEADERS = {

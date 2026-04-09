@@ -5,7 +5,7 @@ import xlwings as xw
 import warnings
 import re
 from datetime import datetime, timedelta
-
+import pywin32
 warnings.filterwarnings('ignore')
 
 # 路径
@@ -211,5 +211,4 @@ def process_device_list():
         return False
 
 if __name__ == '__main__':
-
     process_device_list()
