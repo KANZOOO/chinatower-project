@@ -9,10 +9,11 @@ from playwright.sync_api import sync_playwright
 from core.sql import sql_orm
 import requests
 LOGIN_URL = 'http://4a.chinatowercom.cn:20000/uac/'
+# YZM_URL = 'https://ai.runjian.com:38114/web/get_yzm/list'
 YZM_URL = 'http://clound.gxtower.cn:3980//tt/get_yzm'
 ACCOUNTS = [
      {'username': 'wx-yeping6', 'password': '3Qw@321654', 'cookie_id': 'wx-yeping6'},
-    # {'username': 'dw.rj.fengsw', 'password': '1qaz@WSX', 'cookie_id': 'dw.rj.fengsw'},
+     {'username': 'dw.rj.fengsw', 'password': '1qaz@WSX', 'cookie_id': 'dw.rj.fengsw'},
     #  {'username': 'dw.rj.chengj', 'password': 'Tower1234#', 'cookie_id': 'dw.rj.chengj'},
     # {'username': 'wx-liangyc11', 'password': 'Tower@1234。','cookie_id': 'wx-liangyc11'},
 ]
@@ -54,6 +55,10 @@ class KeepFourA:
         for attempt in range(5):
             try:
                 yzm = requests.get(YZM_URL).text.strip()
+                # cods_list = yzm.get("codes")
+                # for code in cods_list:
+                #     yzm = code
+                #     break
                 page.locator('#msgCode').fill(yzm)
                 page.evaluate("doLogin();")
                 page.wait_for_timeout(5000)

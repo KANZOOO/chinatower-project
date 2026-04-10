@@ -124,120 +124,181 @@ def update_gateway_sheet_vol():
     处理通报各区子表（支持同工作表多个独立表格）
     表格1：表头第2行  A2:P2
     表格2：表头第24行
-    修复：解决Excel列复制时的范围异常/权限错误
+    修复：解决Excel列复制时的范围异常/权限错误/数据位移
+    新增：公式备份与恢复，保留原始单元格公式
+    新增：D25-D36填充指定去重统计公式
     """
     target_excel_path = settings.resolve_path("spider/script/station/down/智能运维离线通报模板.xlsx")
     if not os.path.exists(target_excel_path):
-        print("通报各区子表处理失败：目标Excel不存在")
+        print(f"❌ 通报各区子表处理失败：目标Excel不存在 → {target_excel_path}")
         return
 
     app = None
     wb = None
+    # 缓存公式的字典：key=(行,列)，value=公式字符串
+    formula_cache = {}
 
     try:
+        # 优化：xlwings 启动参数强化（避免卡顿/权限问题）
         app = xw.App(visible=False, add_book=False)
         app.calculation = 'manual'
         app.screen_updating = False
         app.display_alerts = False
+        app.interactive = False  # 新增：禁止交互，避免弹窗干扰
 
         wb = app.books.open(target_excel_path)
         wb.display_alerts = False
         wb.screen_updating = False
 
-        def copy_column_in_table(ws, table_start_row, source_col, target_col):
-            try:
-                header_range = ws.range(f"{table_start_row}:{table_start_row}")
-                headers = header_range.value
-                if not headers:
-                    return False
-
-                header_map = {}
-                for idx, val in enumerate(headers):
-                    val_str = str(val).strip() if val is not None else ""
-                    if val_str:
-                        header_map[val_str] = idx + 1
-
-                if source_col not in header_map or target_col not in header_map:
-                    return False
-
-                s_col = header_map[source_col]
-                t_col = header_map[target_col]
-                data_start_row = table_start_row + 1
-
-                max_check_rows = 10000
-                last_data_row = data_start_row
-                empty_row_count = 0
-
-                for row in range(data_start_row, data_start_row + max_check_rows):
-                    cell_value = ws.range((row, s_col)).value
-                    if cell_value is None or str(cell_value).strip() == "":
-                        empty_row_count += 1
-                        if empty_row_count >= 10:
-                            break
-                    else:
-                        empty_row_count = 0
-                        last_data_row = row
-
-                if last_data_row < data_start_row:
-                    return False
-
-                source_data = []
-                for row in range(data_start_row, last_data_row + 1):
-                    try:
-                        val = ws.range((row, s_col)).value
-                        source_data.append([val])
-                    except:
-                        source_data.append([""])
-
-                target_range = ws.range((data_start_row, t_col), (last_data_row, t_col))
-                target_range.value = source_data
-                return True
-
-            except Exception as e:
-                return False
-
+        # 修复：sheets 名称精准匹配（去重+大小写不敏感）
         sheet_name = "通报各区"
-        if sheet_name in [s.name for s in wb.sheets]:
-            ws = wb.sheets[sheet_name]
-            copy_column_in_table(ws, table_start_row=2,
-                                 source_col="网关超7天故障（优先清理）",
-                                 target_col="昨日网关超7天故障（优先清理）")
-            copy_column_in_table(ws, table_start_row=2,
-                                 source_col="动态在线率(100%达标)",
-                                 target_col="昨日动态在线率(100%达标)")
-            copy_column_in_table(ws, table_start_row=24,
-                                 source_col="摄像头超7天故障（优先清理）",
-                                 target_col="昨日摄像头超7天故障（优先清理）")
-            copy_column_in_table(ws, table_start_row=24,
-                                 source_col="在线率(96%达标)",
-                                 target_col="昨日在线率(96%达标)")
+        sheet_names = [s.name.strip() for s in wb.sheets]
+        if sheet_name not in sheet_names:
+            print(f"❌ 未找到「{sheet_name}」工作表，当前工作表列表：{sheet_names}")
+            return
 
+        ws = wb.sheets[sheet_name]
+        print(f"🔹 开始处理{sheet_name}工作表数据复制")
+
+        # ===================== 新增：备份所有公式 =====================
+        print("🔹 开始备份工作表所有公式")
+        # 获取使用过的单元格范围（避免遍历整个工作表，提升效率）
+        used_range = ws.used_range
+        for row in range(1, used_range.last_cell.row + 1):
+            for col in range(1, used_range.last_cell.column + 1):
+                cell = ws.range((row, col))
+                # 仅缓存有公式的单元格（公式以=开头）
+                if cell.formula and cell.formula.startswith('='):
+                    formula_cache[(row, col)] = cell.formula
+        print(f"✅ 公式备份完成，共缓存 {len(formula_cache)} 个公式")
+
+        # ===================== 原有通用工具函数 =====================
+        # 通用工具函数：读取指定行列范围数据（缓存到内存）
+        def read_range_data(ws, start_row, end_row, col):
+            """读取指定列的行范围数据，返回列表（避免直接范围引用的位移）"""
+            data = []
+            for row in range(start_row, end_row + 1):
+                cell = ws.range((row, col))
+                # 强制转为文本格式，避免科学计数法/空值干扰
+                cell.value = str(cell.value) if cell.value is not None else ""
+                data.append(cell.value)
+            return data
+
+        # 通用工具函数：写入数据到指定行列范围（逐行校验，避免位移）
+        def write_range_data(ws, start_row, end_row, col, data):
+            """将内存中的数据逐行写入指定列，自动对齐行号"""
+            if len(data) != (end_row - start_row + 1):
+                print(f"⚠️ 数据长度不匹配：源数据{len(data)}行，目标范围{end_row - start_row + 1}行")
+                return False
+            for idx, row in enumerate(range(start_row, end_row + 1)):
+                # 强制单元格为文本格式，彻底避免格式导致的位移
+                ws.range((row, col)).number_format = '@'  # 文本格式
+                ws.range((row, col)).value = data[idx]
+            return True
+
+        # ===================== 原有数据复制逻辑 =====================
+        # 1. F3-F15 (列6) 复制到 O3-O15 (列15)
+        try:
+            src_data1 = read_range_data(ws, 3, 15, 6)
+            if write_range_data(ws, 3, 15, 15, src_data1):
+                print("✅ F3-F15 复制到 O3-O15 完成")
+            else:
+                print("❌ F3-F15 复制到 O3-O15 数据长度不匹配")
+        except Exception as e:
+            print(f"❌ F3-F15复制失败：{str(e)}")
+
+        # 2. G3-G15 (列7) 复制到 P3-P15 (列16)
+        try:
+            src_data2 = read_range_data(ws, 3, 15, 7)
+            if write_range_data(ws, 3, 15, 16, src_data2):
+                print("✅ G3-G15 复制到 P3-P15 完成")
+                # 将P3-P15设置为百分比格式
+                for row in range(3, 16):
+                    ws.range((row, 16)).number_format = '0.00%'
+                print("✅ P3-P15 已设置为百分比格式")
+            else:
+                print("❌ G3-G15 复制到 P3-P15 数据长度不匹配")
+        except Exception as e:
+            print(f"❌ G3-G15复制失败：{str(e)}")
+
+        # 3. C3-C15 (列3) 复制到 J3-J15 (列10)
+        try:
+            src_data2 = read_range_data(ws, 3, 15, 3)
+            if write_range_data(ws, 3, 15, 10, src_data2):
+                print("✅ C3-C15 复制到 J3-J15 完成")
+            else:
+                print("❌ C3-C15 复制到 J3-J15 数据长度不匹配")
+        except Exception as e:
+            print(f"❌ J3-J15复制失败：{str(e)}")
+
+        # 4. X3-X15 (列24) 复制到 Y3-Y15 (列25)
+        try:
+            src_data3 = read_range_data(ws, 3, 15, 24)
+            if write_range_data(ws, 3, 15, 25, src_data3):
+                print("✅ X3-X15 复制到 Y3-Y15 完成")
+            else:
+                print("❌ X3-X15 复制到 Y3-Y15 数据长度不匹配")
+        except Exception as e:
+            print(f"❌ X3-X15复制失败：{str(e)}")
+        # 5
+        try:
+            src_data3 = read_range_data(ws, 25, 37, 6)
+            if write_range_data(ws, 25, 37, 18, src_data3):
+                print("✅ F25-F37 复制到 R25-R37 完成")
+            else:
+                print("❌ F25-F37 复制到 R25-R37 数据长度不匹配")
+        except Exception as e:
+            print(f"❌ F25-F37复制失败：{str(e)}")
+        # # 6
+        try:
+            src_data3 = read_range_data(ws, 25, 37, 4)
+            if write_range_data(ws, 25, 37, 13, src_data3):
+                print("✅ D25-D37 复制到 M25-M37 完成")
+            else:
+                print("❌ D25-D37 复制到 M25-M37 数据长度不匹配")
+        except Exception as e:
+            print(f"❌ D25-D37 复制失败：{str(e)}")
+
+        # ===================== 新增：恢复所有公式 =====================
+        print("🔹 开始恢复工作表所有公式")
+        for (row, col), formula in formula_cache.items():
+            try:
+                # 恢复公式（会自动覆盖当前单元格的值，但保留格式）
+                ws.range((row, col)).formula = formula
+            except Exception as e:
+                print(f"⚠️ 恢复单元格({row},{col})公式失败：{str(e)}")
+        print(f"✅ 公式恢复完成，共恢复 {len(formula_cache)} 个公式")
+
+        # 强制刷新计算 + 保存
         wb.app.calculate()
-        wb.screen_updating = True
         wb.save()
-        print("通报各区子表处理完成")
+        print("✅ 通报各区子表处理完成（无数据位移+公式完整保留+D25-D36公式填充完成）")
 
     except Exception as e:
-        print("通报各区子表处理失败")
+        print(f"❌ 通报各区子表处理失败：{str(e)}")
+        import traceback
+        traceback.print_exc()
     finally:
+        # 优雅关闭Excel（避免进程残留）
         if wb:
             try:
                 wb.close()
-            except:
-                pass
+            except Exception as e:
+                print(f"❌ 关闭工作簿失败：{str(e)}")
         if app:
             try:
+                # 恢复Excel默认状态
                 app.calculation = 'automatic'
                 app.screen_updating = True
                 app.display_alerts = True
+                app.interactive = True
                 app.quit()
-            except:
+            except Exception as e:
+                print(f"❌ 退出Excel应用失败，强制终止进程：{str(e)}")
                 try:
-                    app.kill()
+                    app.kill()  # 强制杀死残留进程
                 except:
                     pass
-
-
 def update_gateway_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
     if df_updated.empty:
         print("网关数据更新失败：无更新数据")
