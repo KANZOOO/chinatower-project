@@ -12,13 +12,14 @@ LOGIN_URL = 'http://4a.chinatowercom.cn:20000/uac/'
 YZM_URL = 'https://ai.runjian.com:38114/web/get_yzm/list'
 # YZM_URL = 'http://clound.gxtower.cn:3980//tt/get_yzm'
 ACCOUNTS = [
-     {'username': 'wx-yeping6', 'password': '3Qw@321654', 'cookie_id': 'wx-yeping6'},
-     # {'username': 'dw.rj.fengsw', 'password': '1qaz@WSX', 'cookie_id': 'dw.rj.fengsw'},
+      # {'username': 'wx-yeping6', 'password': '3Qw@321654', 'cookie_id': 'wx-yeping6'},
+      {'username': 'dw.rj.fengsw', 'password': '1qaz@WSX', 'cookie_id': 'dw.rj.fengsw'},
     #  {'username': 'dw.rj.chengj', 'password': 'Tower1234#', 'cookie_id': 'dw.rj.chengj'},
-    # {'username': 'wx-liangyc11', 'password': 'Tower@1234。','cookie_id': 'wx-liangyc11'},
+    # {'username': 'dw.rj.zhouzhen', 'password': 'Tower0235@','cookie_id': 'dw.rj.zhouzhen'},
+    # {'username': 'wx-liangyc11', 'password': 'Tower@1234', 'cookie_id': 'wx-liangyc11'},
+    #  {'username': 'dw.rj.xuxm', 'password': 'Tower123.%', 'cookie_id': 'dw.rj.xuxm'},
+    #  {'username': 'dw.rj.huangzj', 'password': 'Tower023.@', 'cookie_id': 'dw.rj.huangzj'},
 ]
-
-
 class KeepFourA:
     def __init__(self, account_index=0):
         if not 0 <= account_index < len(ACCOUNTS):
@@ -42,6 +43,14 @@ class KeepFourA:
             self.playwright.stop()
 
     def _login(self):
+        """
+        核心登录逻辑：
+        1. 输入账号密码
+        2. 等待15秒（预留验证码生成时间）
+        3. 获取验证码列表并遍历尝试登录
+        4. 执行gores跳转逻辑
+        :return: 登录成功的页面对象
+        """
         # 新建页面并访问登录地址
         page = self.context.new_page()
         page.goto(LOGIN_URL)
@@ -69,8 +78,6 @@ class KeepFourA:
             verify_response.raise_for_status()  # 检查请求是否成功
             verify_data = verify_response.json()  # 解析JSON数据
             codes_list = verify_data.get("codes", [])  # 提取验证码列表
-            print(f"获取到验证码列表：{codes_list}")
-
             # 检查验证码列表是否为空
             if not codes_list:
                 raise RuntimeError("验证码接口返回的codes列表为空")
@@ -106,6 +113,7 @@ class KeepFourA:
                     break
 
                 # 如果未成功，提示并继续下一个验证码
+                print(f"验证码{yzm}尝试失败，继续下一个...")
                 page.wait_for_timeout(2000)
 
             except Exception as e:
@@ -115,8 +123,6 @@ class KeepFourA:
         # 遍历完所有验证码仍未成功
         if not login_success:
             raise RuntimeError(f"遍历所有验证码（共{len(codes_list)}个）均登录失败")
-
-        print("登录流程执行完成，返回登录页面对象")
         return page
 
     def _enter_yunjian(self, page):

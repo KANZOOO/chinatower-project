@@ -238,7 +238,61 @@ def process_device_list():
                 pass
 
         # 7、清单异常匹配故障时间（核心批量处理逻辑）
-        print("🔹 批量处理清单异常数据，填充故障时间公式")
+        print("🔹 批量处理清单异常数据，填充故障时间公式 + X列匹配公式")
+
+        # ====================== 配置区 =======================
+        n_col = 14  # 异常/准确 标识列（N列）
+        s_col = 19  # 故障时间列（S列）
+        x_col = 24  # 新增：X列（第24列）
+        site_code_col = 2  # 站址编码列（B列）
+        # ====================================================
+
+        # 获取清单数据最后一行
+        list_last_row = sht_list.UsedRange.Rows.Count
+
+        # 仅处理有数据的行（跳过表头）
+        if list_last_row >= 2:
+            # 1. 先清空 S列 + X列 所有数据（保留表头）
+            sht_list.Range(sht_list.Cells(2, s_col), sht_list.Cells(list_last_row, s_col)).ClearContents()
+            sht_list.Range(sht_list.Cells(2, x_col), sht_list.Cells(list_last_row, x_col)).ClearContents()
+
+            # 2. 批量生成公式数组（仅N列为"异常"的行填充公式）
+            s_formula_array = []
+            x_formula_array = []
+
+            # 读取N列所有状态值（批量读取，提升效率）
+            rng_n_status = sht_list.Range(
+                sht_list.Cells(2, n_col),
+                sht_list.Cells(list_last_row, n_col)
+            ).Value
+
+            # 遍历每一行生成对应公式
+            for row_idx in range(len(rng_n_status)):
+                # 当前行的实际行号（+1是因为从第2行开始，+row_idx是遍历偏移）
+                actual_row = row_idx + 2
+                # 获取当前行N列的状态
+                status = rng_n_status[row_idx][0] if (
+                            rng_n_status[row_idx] and rng_n_status[row_idx][0] is not None) else ""
+                status = str(status).strip()
+
+                # 判断是否为异常，是则填充公式，否则留空
+                if status == "异常":
+                    s_formula = f"=VLOOKUP(B{actual_row},网格!C:P,14,0)"
+                    x_formula = f"=VLOOKUP(B{actual_row},昨天数据!B:X,23,0)"
+                else:
+                    s_formula = ""
+                    x_formula = ""
+
+                s_formula_array.append([s_formula])
+                x_formula_array.append([x_formula])
+
+            # 3. 批量写入公式到 S列 和 X列（一次性写入，效率极高）
+            sht_list.Range(sht_list.Cells(2, s_col), sht_list.Cells(list_last_row, s_col)).Formula = s_formula_array
+            sht_list.Range(sht_list.Cells(2, x_col), sht_list.Cells(list_last_row, x_col)).Formula = x_formula_array
+
+            print(f"✅ 公式填充完成：共处理 {len(s_formula_array)} 行，异常行自动填充 S列 + X列 公式")
+        else:
+            print("⚠️ 清单工作表无有效数据，跳过公式填充")
 
         # 8、【批量】状态对比：异常 <-> 准确 自动填 处理时间 / 新增故障数
         print("🔹 批量状态对比：昨日数据 ↔ 清单，自动填充处理时间、新增故障数")
@@ -410,5 +464,219 @@ def process_device_list():
         return False
 
 
+def process_lessee_list():
+    """处理租户电流数据：批量写入移动/联通/电信子表，仅导入A-P列，保留表头，批量公式+格式
+    重点：长数字列禁用科学计数法，完整显示 + 三个文件数据追加合并（不覆盖）
+    """
+    today_str = datetime.now().strftime("%Y/%m/%d")
+    print(f"\n开始处理租户电流数据 - {today_str}")
+
+    # ==============================
+    # 【配置区】- 根据实际路径调整
+    # ==============================
+    LESSEE_CONFIG = {
+        "target_excel": os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/分路租户异常通报.xlsx"),
+        # 9个爬取的Excel文件路径（按顺序）
+        "source_excels": [
+            # 移动租户电流
+            os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/分路计量设备-移动租户电流.xls"),
+            os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/开关电源-移动租户电流.xls"),
+            os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/分路计量设备-移动租户电流（5G）.xls"),
+            # 联通租户电流
+            os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/分路计量设备-联通租户电流.xls"),
+            os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/开关电源-联通租户电流.xls"),
+            os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/分路计量设备-联通租户电流（5G）.xls"),
+            # 电信租户电流
+            os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/分路计量设备-电信租户电流.xls"),
+            os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/开关电源-电信租户电流.xls"),
+            os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/分路计量设备-电信租户电流（5G）.xls"),
+        ],
+        # 子表映射：数据源索引 → (目标子表名, Q列填充值)
+        "sheet_mapping": [
+            # 移动
+            ("移动电流", "分路计量设备"),
+            ("移动电流", "开关电源"),
+            ("移动电流", "分路计量设备"),
+            # 联通
+            ("联通电流", "分路计量设备"),
+            ("联通电流", "开关电源"),
+            ("联通电流", "分路计量设备"),
+            # 电信
+            ("电信电流", "分路计量设备"),
+            ("电信电流", "开关电源"),
+            ("电信电流", "分路计量设备"),
+        ]
+    }
+
+    # 需要完整显示、禁止科学计数法的列标题（长数字ID）
+    NO_SCIENCE_COLS = ["站址运维ID", "设备ID", "设备资源编码", "信号量ID"]
+
+    # 记录每个子表是否已经初始化过（只在第一次清空数据）
+    initialized_sheets = set()
+
+    try:
+        # 检查文件是否存在
+        if not os.path.exists(LESSEE_CONFIG["target_excel"]):
+            print(f"❌ 目标文件不存在：{LESSEE_CONFIG['target_excel']}")
+            return False
+
+        for idx, src_file in enumerate(LESSEE_CONFIG["source_excels"]):
+            if not os.path.exists(src_file):
+                print(f"❌ 源文件不存在：{src_file}（索引：{idx}）")
+                return False
+
+        # ==============================
+        # 启动Excel（后台批量处理）
+        # ==============================
+        pythoncom.CoInitialize()
+        excel = win32.Dispatch("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        excel.ScreenUpdating = False
+
+        # 打开目标文件
+        wb_target = excel.Workbooks.Open(LESSEE_CONFIG["target_excel"])
+
+        # 遍历9个数据源
+        for idx, src_file in enumerate(LESSEE_CONFIG["source_excels"]):
+            target_sheet_name, q_col_value = LESSEE_CONFIG["sheet_mapping"][idx]
+            print(f"\n🔹 处理数据源 {idx + 1}/9：")
+            print(f"   源文件：{os.path.basename(src_file)}")
+            print(f"   目标子表：{target_sheet_name} | Q列填充：{q_col_value}")
+
+            # ==============================================
+            # 1. 读取源文件 → 只取 A-P 列（舍弃原Q列）
+            # ==============================================
+            wb_src = excel.Workbooks.Open(src_file)
+            sht_src = wb_src.Sheets(1)
+            last_row_src = sht_src.UsedRange.Rows.Count
+            last_col_src = 16  # 固定只取 A-P 列
+
+            if last_row_src < 2:
+                print(f"⚠️ 无有效数据，跳过")
+                wb_src.Close(False)
+                continue
+
+            # 批量读取 A1:P[最后行]
+            src_data = sht_src.Range(
+                sht_src.Cells(1, 1),
+                sht_src.Cells(last_row_src, last_col_src)
+            ).Value
+            wb_src.Close(False)
+
+            # ==============================================
+            # 2. 目标子表：仅第一次清空数据（后续追加）
+            # ==============================================
+            sht_target = wb_target.Sheets(target_sheet_name)
+            if target_sheet_name not in initialized_sheets:
+                # 第一次处理：清空数据行，保留表头
+                on_use_row = sht_target.UsedRange.Rows.Count
+                if on_use_row >= 2:
+                    sht_target.Rows(f"2:{on_use_row}").Delete()
+                initialized_sheets.add(target_sheet_name)
+                print(f"   ✅ 首次清空{target_sheet_name}数据行（保留表头）")
+
+            # ==============================================
+            # 3. 找到当前子表最后一行 → 追加写入（不覆盖）
+            # ==============================================
+            current_last_row = sht_target.UsedRange.Rows.Count
+            insert_start_row = current_last_row + 1  # 从下一行开始追加
+
+            # 写入数据（跳过表头，只写数据行）
+            data_rows = last_row_src - 1
+            if data_rows > 0:
+                sht_target.Range(
+                    sht_target.Cells(insert_start_row, 1),
+                    sht_target.Cells(insert_start_row + data_rows - 1, last_col_src)
+                ).Value = sht_src.Range(
+                    sht_src.Cells(2, 1),
+                    sht_src.Cells(last_row_src, last_col_src)
+                ).Value
+                print(f"   ✅ 追加写入 {data_rows} 行，累计：{insert_start_row + data_rows - 1} 行")
+
+            # ==============================================
+            # 4. Q列批量填充（第17列）
+            # ==============================================
+            q_col = 17
+            if data_rows > 0:
+                sht_target.Range(
+                    sht_target.Cells(insert_start_row, q_col),
+                    sht_target.Cells(insert_start_row + data_rows - 1, q_col)
+                ).Value = q_col_value
+                print(f"   ✅ Q列填充「{q_col_value}」")
+
+            # ==============================================
+            # 5. R列 = E2&Q2 、S列 = N2（批量公式）
+            # ==============================================
+            if data_rows > 0:
+                # R列
+                sht_target.Range(
+                    f"R{insert_start_row}:R{insert_start_row + data_rows - 1}").Formula = f"=E{insert_start_row}&Q{insert_start_row}"
+                # S列
+                sht_target.Range(
+                    f"S{insert_start_row}:S{insert_start_row + data_rows - 1}").Formula = f"=N{insert_start_row}"
+                print(f"   ✅ R/S列批量公式写入完成")
+
+        # ==============================
+        # 统一收尾：N列排序 + 长数字格式
+        # ==============================
+        print("\n📌 开始统一格式处理（所有子表）...")
+        for sheet_name in ["移动电流", "联通电流", "电信电流"]:
+            try:
+                sht = wb_target.Sheets(sheet_name)
+                last_row = sht.UsedRange.Rows.Count
+                if last_row < 2:
+                    continue
+
+                # 1. N列数字格式 + 降序
+                n_col = 14
+                sht.Columns(n_col).NumberFormat = "0.00"
+                n_range = sht.Range(sht.Cells(2, n_col), sht.Cells(last_row, n_col))
+                n_values = n_range.Value
+                new_n = []
+                for v in n_values:
+                    try:
+                        num = float(v[0]) if (v and v[0] is not None) else 0.0
+                    except:
+                        num = 0.0
+                    new_n.append([num])
+                n_range.Value = new_n
+
+                sort_rng = sht.Range(sht.Cells(1, 1), sht.Cells(last_row, 19))
+                sort_rng.Sort(Key1=sht.Columns(n_col), Order1=2, Header=1, Orientation=1)
+
+                # 2. 长数字列禁用科学计数法
+                header_arr = list(sht.Range(sht.Cells(1, 1), sht.Cells(1, 50)).Value[0])
+                for col_idx, col_name in enumerate(header_arr, start=1):
+                    if col_name in NO_SCIENCE_COLS:
+                        sht.Columns(col_idx).NumberFormat = "@"
+
+                print(f"   ✅ {sheet_name} 格式处理完成")
+            except:
+                print(f"   ⚠️ {sheet_name} 无需处理或处理失败")
+
+        # ==============================
+        # 保存退出
+        # ==============================
+        excel.ScreenUpdating = True
+        wb_target.Save()
+        wb_target.Close()
+        excel.Quit()
+        pythoncom.CoUninitialize()
+
+        print("\n✅ 全部电流数据处理完成！三张表数据全部追加保留！")
+        return True
+
+    except Exception as e:
+        print(f"\n❌ 处理失败：{str(e)}")
+        try:
+            excel.ScreenUpdating = True
+            excel.Quit()
+        except:
+            pass
+        pythoncom.CoUninitialize()
+        return False
+
 if __name__ == '__main__':
-    process_device_list()
+    # process_device_list()
+    process_lessee_list()
