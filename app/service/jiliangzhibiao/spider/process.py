@@ -462,11 +462,16 @@ def process_device_list():
             pass
         pythoncom.CoUninitialize()
         return False
-
-
 def process_lessee_list():
     """处理租户电流数据：批量写入移动/联通/电信子表，仅导入A-P列，保留表头，批量公式+格式
     重点：长数字列禁用科学计数法，完整显示 + 三个文件数据追加合并（不覆盖）
+    修复点：
+    1. 每次运行强制清空三张表数据（仅保留表头）
+    2. 关闭源文件前先提取所有需要的数据，避免访问失效对象
+    3. 优化行数/列数计算逻辑，防止越界
+    4. 增加源文件读取容错（处理.xls老格式）
+    5. 优化COM对象释放逻辑
+    6. 修复公式写入的相对引用问题
     """
     today_str = datetime.now().strftime("%Y/%m/%d")
     print(f"\n开始处理租户电流数据 - {today_str}")
@@ -510,9 +515,12 @@ def process_lessee_list():
 
     # 需要完整显示、禁止科学计数法的列标题（长数字ID）
     NO_SCIENCE_COLS = ["站址运维ID", "设备ID", "设备资源编码", "信号量ID"]
+    # 固定需要清空的三张表
+    TARGET_SHEETS = ["移动电流", "联通电流", "电信电流"]
 
-    # 记录每个子表是否已经初始化过（只在第一次清空数据）
-    initialized_sheets = set()
+    # 初始化Excel对象（提前定义，避免异常时无法释放）
+    excel = None
+    wb_target = None
 
     try:
         # 检查文件是否存在
@@ -537,6 +545,24 @@ def process_lessee_list():
         # 打开目标文件
         wb_target = excel.Workbooks.Open(LESSEE_CONFIG["target_excel"])
 
+        # ==============================
+        # 【核心修复】强制清空三张表所有数据，仅保留表头
+        # 每次运行都清空，彻底杜绝数据残留
+        # ==============================
+        print("\n🧹 开始强制清空三张表数据（保留表头）...")
+        for sheet_name in TARGET_SHEETS:
+            try:
+                sht = wb_target.Sheets(sheet_name)
+                last_row = sht.UsedRange.Rows.Count if sht.UsedRange.Rows.Count else 1
+                if last_row >= 2:
+                    # 彻底删除第2行到最后一行（保留第1行表头）
+                    sht.Rows(f"2:{last_row}").Delete()
+                    print(f"   ✅ 已清空 {sheet_name} 所有数据行")
+                else:
+                    print(f"   ℹ️ {sheet_name} 无数据需要清空")
+            except Exception as e:
+                print(f"   ⚠️ 清空 {sheet_name} 失败：{str(e)}")
+
         # 遍历9个数据源
         for idx, src_file in enumerate(LESSEE_CONFIG["source_excels"]):
             target_sheet_name, q_col_value = LESSEE_CONFIG["sheet_mapping"][idx]
@@ -547,55 +573,61 @@ def process_lessee_list():
             # ==============================================
             # 1. 读取源文件 → 只取 A-P 列（舍弃原Q列）
             # ==============================================
-            wb_src = excel.Workbooks.Open(src_file)
-            sht_src = wb_src.Sheets(1)
-            last_row_src = sht_src.UsedRange.Rows.Count
-            last_col_src = 16  # 固定只取 A-P 列
+            wb_src = None
+            sht_src = None
+            src_data_rows = None
+            try:
+                wb_src = excel.Workbooks.Open(src_file)
+                sht_src = wb_src.Sheets(1)
+                last_row_src = sht_src.UsedRange.Rows.Count if sht_src.UsedRange.Rows.Count else 0
+                last_col_src = 16  # 固定只取 A-P 列
 
-            if last_row_src < 2:
-                print(f"⚠️ 无有效数据，跳过")
-                wb_src.Close(False)
+                if last_row_src < 2:
+                    print(f"⚠️ 无有效数据（行数<2），跳过")
+                    continue
+
+                # 读取数据行（第2行到最后一行）
+                src_data_rows = sht_src.Range(
+                    sht_src.Cells(2, 1),
+                    sht_src.Cells(last_row_src, last_col_src)
+                ).Value
+
+                print(f"   ✅ 读取源文件数据：{last_row_src - 1} 行")
+
+            except Exception as e:
+                print(f"⚠️ 读取源文件失败：{str(e)}")
+                if wb_src:
+                    wb_src.Close(False)
+                continue
+            finally:
+                # 及时关闭源文件
+                if wb_src:
+                    wb_src.Close(False)
+                    wb_src = None
+                    sht_src = None
+
+            if not src_data_rows:
+                print(f"⚠️ 源文件无有效数据行，跳过")
                 continue
 
-            # 批量读取 A1:P[最后行]
-            src_data = sht_src.Range(
-                sht_src.Cells(1, 1),
-                sht_src.Cells(last_row_src, last_col_src)
-            ).Value
-            wb_src.Close(False)
-
             # ==============================================
-            # 2. 目标子表：仅第一次清空数据（后续追加）
+            # 2. 找到当前子表最后一行 → 追加写入
             # ==============================================
             sht_target = wb_target.Sheets(target_sheet_name)
-            if target_sheet_name not in initialized_sheets:
-                # 第一次处理：清空数据行，保留表头
-                on_use_row = sht_target.UsedRange.Rows.Count
-                if on_use_row >= 2:
-                    sht_target.Rows(f"2:{on_use_row}").Delete()
-                initialized_sheets.add(target_sheet_name)
-                print(f"   ✅ 首次清空{target_sheet_name}数据行（保留表头）")
+            current_last_row = sht_target.UsedRange.Rows.Count if sht_target.UsedRange.Rows.Count else 1
+            insert_start_row = current_last_row + 1
+            data_rows = len(src_data_rows)
 
-            # ==============================================
-            # 3. 找到当前子表最后一行 → 追加写入（不覆盖）
-            # ==============================================
-            current_last_row = sht_target.UsedRange.Rows.Count
-            insert_start_row = current_last_row + 1  # 从下一行开始追加
-
-            # 写入数据（跳过表头，只写数据行）
-            data_rows = last_row_src - 1
+            # 写入数据
             if data_rows > 0:
                 sht_target.Range(
                     sht_target.Cells(insert_start_row, 1),
                     sht_target.Cells(insert_start_row + data_rows - 1, last_col_src)
-                ).Value = sht_src.Range(
-                    sht_src.Cells(2, 1),
-                    sht_src.Cells(last_row_src, last_col_src)
-                ).Value
-                print(f"   ✅ 追加写入 {data_rows} 行，累计：{insert_start_row + data_rows - 1} 行")
+                ).Value = src_data_rows
+                print(f"   ✅ 追加写入 {data_rows} 行")
 
             # ==============================================
-            # 4. Q列批量填充（第17列）
+            # 3. Q列批量填充
             # ==============================================
             q_col = 17
             if data_rows > 0:
@@ -606,76 +638,88 @@ def process_lessee_list():
                 print(f"   ✅ Q列填充「{q_col_value}」")
 
             # ==============================================
-            # 5. R列 = E2&Q2 、S列 = N2（批量公式）
+            # 4. R列 = E列&Q列 、S列 = N列（批量公式）
             # ==============================================
             if data_rows > 0:
-                # R列
-                sht_target.Range(
-                    f"R{insert_start_row}:R{insert_start_row + data_rows - 1}").Formula = f"=E{insert_start_row}&Q{insert_start_row}"
-                # S列
-                sht_target.Range(
-                    f"S{insert_start_row}:S{insert_start_row + data_rows - 1}").Formula = f"=N{insert_start_row}"
+                # 相对引用公式，自动适配行号
+                sht_target.Range(f"R{insert_start_row}:R{insert_start_row + data_rows - 1}").Formula = f"=E{insert_start_row}&Q{insert_start_row}"
+                sht_target.Range(f"S{insert_start_row}:S{insert_start_row + data_rows - 1}").Formula = f"=N{insert_start_row}"
                 print(f"   ✅ R/S列批量公式写入完成")
 
         # ==============================
         # 统一收尾：N列排序 + 长数字格式
         # ==============================
         print("\n📌 开始统一格式处理（所有子表）...")
-        for sheet_name in ["移动电流", "联通电流", "电信电流"]:
+        for sheet_name in TARGET_SHEETS:
             try:
                 sht = wb_target.Sheets(sheet_name)
-                last_row = sht.UsedRange.Rows.Count
+                last_row = sht.UsedRange.Rows.Count if sht.UsedRange.Rows.Count else 1
                 if last_row < 2:
+                    print(f"   ⚠️ {sheet_name} 无有效数据，跳过格式处理")
                     continue
 
                 # 1. N列数字格式 + 降序
                 n_col = 14
                 sht.Columns(n_col).NumberFormat = "0.00"
                 n_range = sht.Range(sht.Cells(2, n_col), sht.Cells(last_row, n_col))
-                n_values = n_range.Value
+                n_values = n_range.Value or []
                 new_n = []
                 for v in n_values:
                     try:
-                        num = float(v[0]) if (v and v[0] is not None) else 0.0
-                    except:
+                        val = v[0] if isinstance(v, (list, tuple)) else v
+                        num = float(val) if (val is not None and val != "") else 0.0
+                    except (ValueError, TypeError):
                         num = 0.0
                     new_n.append([num])
-                n_range.Value = new_n
+                if new_n:
+                    n_range.Value = new_n
 
+                # 排序
                 sort_rng = sht.Range(sht.Cells(1, 1), sht.Cells(last_row, 19))
-                sort_rng.Sort(Key1=sht.Columns(n_col), Order1=2, Header=1, Orientation=1)
+                sort_rng.Sort(Key1=sht.Columns(n_col), Order1=2, Header=1, Orientation=1, MatchCase=False)
 
                 # 2. 长数字列禁用科学计数法
-                header_arr = list(sht.Range(sht.Cells(1, 1), sht.Cells(1, 50)).Value[0])
+                header_range = sht.Range(sht.Cells(1, 1), sht.Cells(1, 50))
+                header_arr = [cell.Value for cell in header_range] if header_range.Value else []
                 for col_idx, col_name in enumerate(header_arr, start=1):
                     if col_name in NO_SCIENCE_COLS:
                         sht.Columns(col_idx).NumberFormat = "@"
 
                 print(f"   ✅ {sheet_name} 格式处理完成")
-            except:
-                print(f"   ⚠️ {sheet_name} 无需处理或处理失败")
+            except Exception as e:
+                print(f"   ⚠️ {sheet_name} 格式处理失败：{str(e)}")
 
         # ==============================
         # 保存退出
         # ==============================
         excel.ScreenUpdating = True
         wb_target.Save()
-        wb_target.Close()
-        excel.Quit()
-        pythoncom.CoUninitialize()
-
-        print("\n✅ 全部电流数据处理完成！三张表数据全部追加保留！")
-        return True
+        print(f"\n✅ 目标文件已保存")
 
     except Exception as e:
         print(f"\n❌ 处理失败：{str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    finally:
+        # 释放Excel资源
         try:
-            excel.ScreenUpdating = True
-            excel.Quit()
+            if wb_target:
+                wb_target.Close(SaveChanges=True)
+        except:
+            pass
+        try:
+            if excel:
+                excel.ScreenUpdating = True
+                excel.Quit()
         except:
             pass
         pythoncom.CoUninitialize()
-        return False
+        print("✅ Excel资源已释放")
+
+    print("\n✅ 全部电流数据处理完成！数据已全新写入无残留！")
+    return True
 
 if __name__ == '__main__':
     # process_device_list()

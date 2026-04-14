@@ -15,12 +15,6 @@ from spider.schema.data_edge_x import data
 通用函数模块，包含项目中常用的工具函数，如重试装饰器、请求函数、文件操作函数等。
 """
 def get_foura_cookie(cookie_id="wx-yeping6"):
-    """
-    从数据库中获取指定账号的 foura cookie 信息。
-
-    :param cookie_id: 数据库中 cookie 记录的 ID（账号名），默认为"wx-yeping6"。
-    :return: 解析后的 cookie 字典；若 ID 不存在/格式错误，返回空字典。
-    """
     db = sql_orm()
     cookie_result = db.get_cookies(cookie_id)
     return cookie_result["cookies"]
@@ -32,6 +26,7 @@ def get_foura_cookie(cookie_id="wx-yeping6"):
     except:
         pass
     return cookies
+
 def retry(max_attempts=1, delay=2):
     """
     重试装饰器，用于对指定函数进行重试操作。

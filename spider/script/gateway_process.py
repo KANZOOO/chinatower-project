@@ -14,6 +14,7 @@ warnings.filterwarnings('ignore')
 - 彻底解决其他Sheet引用新网关总清单失效问题
 - 原有逻辑100%保留
 - 修复update_gateway_sheet_vol()列复制Excel异常问题
+- 新增：将边缘网关G列（设备当前状态）填充到网关总清单M列
 """
 
 
@@ -53,6 +54,10 @@ def preprocess_gateway_data(gateway_raw_path):
     if df_gateway.empty:
         return pd.DataFrame()
     core_fields = ["设备编码", "设备名称", "国家行政区县", "所属站址名称", "站址资源编码"]
+    # 新增：加入设备当前状态字段（对应边缘网关G列）
+    if "设备当前状态" not in core_fields:
+        core_fields.append("设备当前状态")
+
     for field in core_fields:
         if field not in df_gateway.columns:
             df_gateway[field] = ""
@@ -257,7 +262,7 @@ def update_gateway_sheet_vol():
             else:
                 print("❌ D25-D37 复制到 M25-M37 数据长度不匹配")
         except Exception as e:
-            print(f"❌ D25-D37 复制失败：{str(e)}")
+            print(f"❌ D25-D37复制失败：{str(e)}")
 
         # ===================== 新增：恢复所有公式 =====================
         print("🔹 开始恢复工作表所有公式")
@@ -299,6 +304,8 @@ def update_gateway_sheet_vol():
                     app.kill()  # 强制杀死残留进程
                 except:
                     pass
+
+
 def update_gateway_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
     if df_updated.empty:
         print("网关数据更新失败：无更新数据")
@@ -343,10 +350,27 @@ def update_gateway_sheet_with_xlwings(target_excel_path, sheet_name, df_updated)
                 col_idx = header_dict[col_name]
                 ws.range((1, col_idx), (data_rows + 1, col_idx)).number_format = "@"
 
+        # 写入所有有效列数据（包含新增的设备当前状态）
         for col_name in valid_cols:
             col_idx = header_dict[col_name]
             col_data = df_valid[col_name].tolist()
             ws.range((2, col_idx), (data_rows + 1, col_idx)).value = [[val] for val in col_data]
+
+        # ===================== 核心新增逻辑：设备当前状态写入M列 =====================
+        # 方式1：如果M列有明确表头（如「设备当前状态」），已通过上面的循环自动写入
+        # 方式2：强制写入M列（无论表头名称），兼容无表头场景
+        status_col_name = "设备当前状态"
+        if status_col_name in df_updated.columns:
+            # M列对应的数字索引是13
+            m_col_idx = 13
+            # 获取设备当前状态数据
+            status_data = df_updated[status_col_name].tolist()
+            # 写入M列（从第2行开始）
+            ws.range((2, m_col_idx), (data_rows + 1, m_col_idx)).value = [[val] for val in status_data]
+            # 强制M列为文本格式
+            ws.range((1, m_col_idx), (data_rows + 1, m_col_idx)).number_format = "@"
+            print(f"✅ 已将设备当前状态写入网关总清单M列，共{len(status_data)}行数据")
+        # ==========================================================================
 
         if "是否临时入网" in header_dict and "设备编码" in header_dict:
             code_col = header_dict["设备编码"]
@@ -444,7 +468,9 @@ def update_gateway_sheet_with_xlwings(target_excel_path, sheet_name, df_updated)
         return True
 
     except Exception as e:
-        print("网关数据更新失败")
+        print(f"网关数据更新失败：{str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
     finally:
         if wb:
@@ -565,7 +591,7 @@ def update_gateway_offline_list():
 
         missing_required = [f for f in required_fields if f not in header_dict]
         if missing_required:
-            print(f"网关离线清单更新失败：表头中缺少必填字段")
+            print(f"网关离线清单更新失败：表头中缺少必填字段 {missing_required}")
             return
 
         for field in required_fields:
@@ -654,7 +680,9 @@ def update_gateway_offline_list():
         print("网关离线清单更新完成")
 
     except Exception as e:
-        print("网关离线清单更新失败")
+        print(f"网关离线清单更新失败：{str(e)}")
+        import traceback
+        traceback.print_exc()
     finally:
         if app:
             app.calculation = 'automatic'

@@ -12,11 +12,11 @@ LOGIN_URL = 'http://4a.chinatowercom.cn:20000/uac/'
 YZM_URL = 'https://ai.runjian.com:38114/web/get_yzm/list'
 # YZM_URL = 'http://clound.gxtower.cn:3980//tt/get_yzm'
 ACCOUNTS = [
-      # {'username': 'wx-yeping6', 'password': '3Qw@321654', 'cookie_id': 'wx-yeping6'},
-      {'username': 'dw.rj.fengsw', 'password': '1qaz@WSX', 'cookie_id': 'dw.rj.fengsw'},
+       {'username': 'wx-yeping6', 'password': '3Qw@321654', 'cookie_id': 'wx-yeping6'},
+       {'username': 'dw.rj.fengsw', 'password': '1qaz@WSX', 'cookie_id': 'dw.rj.fengsw'},
     #  {'username': 'dw.rj.chengj', 'password': 'Tower1234#', 'cookie_id': 'dw.rj.chengj'},
-    # {'username': 'dw.rj.zhouzhen', 'password': 'Tower0235@','cookie_id': 'dw.rj.zhouzhen'},
-    # {'username': 'wx-liangyc11', 'password': 'Tower@1234', 'cookie_id': 'wx-liangyc11'},
+    #  {'username': 'dw.rj.zhouzhen', 'password': 'Tower0235@','cookie_id': 'dw.rj.zhouzhen'},
+    #  {'username': 'wx-liangyc11', 'password': 'Tower@1234', 'cookie_id': 'wx-liangyc11'},
     #  {'username': 'dw.rj.xuxm', 'password': 'Tower123.%', 'cookie_id': 'dw.rj.xuxm'},
     #  {'username': 'dw.rj.huangzj', 'password': 'Tower023.@', 'cookie_id': 'dw.rj.huangzj'},
 ]
