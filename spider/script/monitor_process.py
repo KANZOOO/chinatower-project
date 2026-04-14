@@ -256,7 +256,6 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
                 df = pd.DataFrame(data_range.value[1:], columns=data_range.value[0])
                 df = df.fillna("")
                 reduce_col = df["核减"].astype(str)
-
                 mask = (df["核减"].notna() &
                         (reduce_col.str.strip() != "") &
                         (~reduce_col.str.startswith("#", na=False)))
