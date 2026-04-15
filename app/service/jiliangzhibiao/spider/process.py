@@ -94,17 +94,8 @@ def process_device_list():
         sht_shifen = wb.Sheets("室分站址")
         sht_wangge = wb.Sheets("网格")
 
-        # 【修改2】提前初始化所有目标sheet的文本列格式（先设格式，后写数据）
-        print("🔹 提前初始化关键列文本格式（防止科学计数法）")
-        target_sheets = [sht_list, sht_yesterday, sht_today, sht_shifen, sht_wangge]
-        for sheet in target_sheets:
-            for field in TEXT_FORMAT_FIELDS:
-                col_idx = get_col_index(sheet, field)
-                if not col_idx:
-                    continue
-                # 整列设置为文本格式（覆盖所有行，包括未写入的行）
-                sheet.Columns(col_idx).NumberFormat = "@"  # 整列设为文本，核心！
-        print("✅ 关键列文本格式初始化完成")
+        # 【修改2】暂时跳过文本格式初始化，先执行核心复制操作
+        print("🔹 跳过文本格式初始化，先执行核心操作")
 
         # 1. 清空昨日数据 → 复制清单到昨日数据
         print("🔹 复制清单数据到昨日数据工作表")
@@ -114,15 +105,25 @@ def process_device_list():
         last_col_list = sht_list.UsedRange.Columns.Count
 
         if last_row_list >= 1 and last_col_list >= 1:
-            data_copy = sht_list.Range(
+            # 【最终方案】先计算源表所有公式，然后使用Excel粘贴为数值
+            try:
+                excel.Calculate()
+                sht_list.Calculate()
+            except:
+                pass
+            
+            # 复制源表整个区域
+            sht_list.Range(
                 sht_list.Cells(1, 1),
                 sht_list.Cells(last_row_list, last_col_list)
-            ).Value
-            # 批量写入昨天数据
-            sht_yesterday.Range(
-                sht_yesterday.Cells(1, 1),
-                sht_yesterday.Cells(last_row_list, last_col_list)
-            ).Value = data_copy
+            ).Copy()
+            
+            # 直接粘贴为数值（Paste=-4163 就是粘贴为数值）
+            sht_yesterday.Range("A1").PasteSpecial(Paste=-4163)
+            
+            # 清除剪切板模式
+            excel.CutCopyMode = False
+            print("✅ 粘贴为数值完成")
 
         # 2. 清空今日数据 → 批量写入爬取数据
         print("🔹 批量写入今日数据")
@@ -212,38 +213,18 @@ def process_device_list():
         sht_list.Range("A1").PasteSpecial(Paste=-4163)  # -4163=值，-4122=格式（可叠加）
         excel.CutCopyMode = False
 
-        # 【修改6】兜底：再次校验关键列格式（防止复制过程中格式丢失）
-        print("🔹 最终校验关键列文本格式")
-        for sheet in target_sheets:
-            try:
-                for field in TEXT_FORMAT_FIELDS:
-                    col_idx = get_col_index(sheet, field)
-                    if not col_idx:
-                        continue
-                    last_row = sheet.UsedRange.Rows.Count
-                    if last_row < 2:
-                        continue
-                    rng = sheet.Range(sheet.Cells(2, col_idx), sheet.Cells(last_row, col_idx))
-                    # 再次确认格式+强制文本（无循环批量处理）
-                    rng.NumberFormat = "@"
-                    vals = rng.Value
-                    new_vals = []
-                    for item in vals:
-                        v = str(item[0]).strip() if (item and item[0] is not None) else ""
-                        new_vals.append(["'" + v])
-                    rng.Value = new_vals
-                print(f"✅ {sheet.Name} 文本格式校验完成")
-            except Exception as e:
-                print(f"⚠️ {sheet.Name} 格式校验警告：{str(e)}")
-                pass
+        # 【修改6】暂时跳兜底校验，先让核心操作完成
+        print("🔹 跳过最终校验，先让核心操作完成")
 
-        # 7、清单异常匹配故障时间（核心批量处理逻辑）
-        print("🔹 批量处理清单异常数据，填充故障时间公式 + X列匹配公式")
+        # 7、清单异常匹配故障时间 + T/U列公式（核心批量处理逻辑）
+        print("🔹 批量处理清单数据，填充 S/T/U/X 列公式")
 
         # ====================== 配置区 =======================
         n_col = 14  # 异常/准确 标识列（N列）
         s_col = 19  # 故障时间列（S列）
-        x_col = 24  # 新增：X列（第24列）
+        t_col = 20  # 处理时间列（T列）
+        u_col = 21  # 新增故障数列（U列）
+        x_col = 24  # 故障时间列（X列）
         site_code_col = 2  # 站址编码列（B列）
         # ====================================================
 
@@ -252,12 +233,16 @@ def process_device_list():
 
         # 仅处理有数据的行（跳过表头）
         if list_last_row >= 2:
-            # 1. 先清空 S列 + X列 所有数据（保留表头）
+            # 1. 先清空 S/T/U/X 列所有数据（保留表头）
             sht_list.Range(sht_list.Cells(2, s_col), sht_list.Cells(list_last_row, s_col)).ClearContents()
+            sht_list.Range(sht_list.Cells(2, t_col), sht_list.Cells(list_last_row, t_col)).ClearContents()
+            sht_list.Range(sht_list.Cells(2, u_col), sht_list.Cells(list_last_row, u_col)).ClearContents()
             sht_list.Range(sht_list.Cells(2, x_col), sht_list.Cells(list_last_row, x_col)).ClearContents()
 
-            # 2. 批量生成公式数组（仅N列为"异常"的行填充公式）
+            # 2. 批量生成公式数组
             s_formula_array = []
+            t_formula_array = []
+            u_formula_array = []
             x_formula_array = []
 
             # 读取N列所有状态值（批量读取，提升效率）
@@ -282,112 +267,29 @@ def process_device_list():
                 else:
                     s_formula = ""
                     x_formula = ""
+                
+                # T列公式：=IF(AND(VLOOKUP(B2,昨天数据!$B:$N,13,FALSE)="异常", N2="准确"), TODAY(), "")
+                t_formula = f'=IF(AND(VLOOKUP(B{actual_row},昨天数据!$B:$N,13,FALSE)="异常", N{actual_row}="准确"), TODAY(), "")'
+                
+                # U列公式：=IF(AND(VLOOKUP(B2,昨天数据!$B:$N,13,FALSE)="准确", N2="异常"), 1, "")
+                u_formula = f'=IF(AND(VLOOKUP(B{actual_row},昨天数据!$B:$N,13,FALSE)="准确", N{actual_row}="异常"), 1, "")'
 
                 s_formula_array.append([s_formula])
+                t_formula_array.append([t_formula])
+                u_formula_array.append([u_formula])
                 x_formula_array.append([x_formula])
 
-            # 3. 批量写入公式到 S列 和 X列（一次性写入，效率极高）
+            # 3. 批量写入公式到 S/T/U/X 列（一次性写入，效率极高）
             sht_list.Range(sht_list.Cells(2, s_col), sht_list.Cells(list_last_row, s_col)).Formula = s_formula_array
+            sht_list.Range(sht_list.Cells(2, t_col), sht_list.Cells(list_last_row, t_col)).Formula = t_formula_array
+            sht_list.Range(sht_list.Cells(2, u_col), sht_list.Cells(list_last_row, u_col)).Formula = u_formula_array
             sht_list.Range(sht_list.Cells(2, x_col), sht_list.Cells(list_last_row, x_col)).Formula = x_formula_array
 
-            print(f"✅ 公式填充完成：共处理 {len(s_formula_array)} 行，异常行自动填充 S列 + X列 公式")
+            print(f"✅ 公式填充完成：共处理 {len(s_formula_array)} 行，自动填充 S/T/U/X 列公式")
         else:
             print("⚠️ 清单工作表无有效数据，跳过公式填充")
 
-        # 8、【批量】状态对比：异常 <-> 准确 自动填 处理时间 / 新增故障数
-        print("🔹 批量状态对比：昨日数据 ↔ 清单，自动填充处理时间、新增故障数")
-
-        # ====================== 配置区 =======================
-        n_col = 14  # 异常/准确 标识列（N列）
-        t_col = 20  # 处理时间 列（T列）
-        u_col = 21  # 新增故障数 列（U列）
-        site_code_col = 2  # 站址编码 所在列（默认B列=2）
-        today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # 当天时间
-        # ====================================================
-
-        # ----------------------
-        # 1. 批量读取【清单】全部关键列：站址编码、N列状态
-        # ----------------------
-        list_last_row = sht_list.UsedRange.Rows.Count
-        list_site_codes = []
-        list_n_status = []
-        if list_last_row >= 2:
-            # 读取 站址编码 列
-            rng_site_list = sht_list.Range(sht_list.Cells(2, site_code_col),
-                                           sht_list.Cells(list_last_row, site_code_col))
-            list_site_codes = rng_site_list.Value
-
-            rng_n_list = sht_list.Range(sht_list.Cells(2, n_col), sht_list.Cells(list_last_row, n_col))
-            list_n_status = rng_n_list.Value
-
-        # ----------------------
-        # 2. 批量读取【昨天数据】全部关键列：站址编码、N列状态
-        # ----------------------
-        yesterday_last_row = sht_yesterday.UsedRange.Rows.Count
-        yesterday_site_dict = {}
-        if yesterday_last_row >= 2:
-            rng_site_yest = sht_yesterday.Range(sht_yesterday.Cells(2, site_code_col),
-                                                sht_yesterday.Cells(yesterday_last_row, site_code_col))
-            yesterday_site_codes = rng_site_yest.Value
-
-            rng_n_yest = sht_yesterday.Range(sht_yesterday.Cells(2, n_col),
-                                             sht_yesterday.Cells(yesterday_last_row, n_col))
-            yesterday_n_status = rng_n_yest.Value
-
-            for i in range(len(yesterday_site_codes)):
-                s = yesterday_site_codes[i][0] if isinstance(yesterday_site_codes[i], (list, tuple)) else \
-                    yesterday_site_codes[i]
-                s = str(s).strip() if s else ""
-
-                st = yesterday_n_status[i][0] if isinstance(yesterday_n_status[i], (list, tuple)) else \
-                    yesterday_n_status[i]
-                st = str(st).strip() if st else ""
-
-                if s:
-                    yesterday_site_dict[s] = st
-
-        # ----------------------
-        # 3. 批量生成 T列（处理时间）、U列（新增故障数）数组
-        # ----------------------
-        t_array = []  # 处理时间
-        u_array = []  # 新增故障数
-
-        if list_last_row >= 2:
-            for i in range(len(list_site_codes)):
-
-                site = list_site_codes[i][0] if isinstance(list_site_codes[i], (list, tuple)) else list_site_codes[i]
-                site = str(site).strip() if site else ""
-
-                now_status = list_n_status[i][0] if isinstance(list_n_status[i], (list, tuple)) else list_n_status[i]
-                now_status = str(now_status).strip() if now_status else ""
-
-                last_status = yesterday_site_dict.get(site, "")
-
-                t_val = ""
-                u_val = ""
-
-                if last_status == "异常" and now_status == "准确":
-                    t_val = today
-                if last_status == "准确" and now_status == "异常":
-                    u_val = "1"
-
-                t_array.append([t_val])
-                u_array.append([u_val])
-
-            sht_list.Range(
-                sht_list.Cells(2, t_col),
-                sht_list.Cells(list_last_row, t_col)
-            ).Value = t_array
-
-            # 写入 U列 新增故障数
-            sht_list.Range(
-                sht_list.Cells(2, u_col),
-                sht_list.Cells(list_last_row, u_col)
-            ).Value = u_array
-
-        print("✅ 状态对比 & 自动填充完成")
-
-        # 9、【纯批量】清单G列填充VLOOKUP公式：=VLOOKUP(B2,网格!C:I,7,0)
+        # 8、【纯批量】清单G列填充VLOOKUP公式：=VLOOKUP(B2,网格!C:I,7,0)
         print("🔹 仅清单工作表：保留表头，清空G列数据并批量填充VLOOKUP公式")
         g_col = 7  # G列固定列号
         # 仅获取【清单】工作表的最后一行数据
@@ -412,7 +314,7 @@ def process_device_list():
         else:
             print("⚠️ 清单工作表无有效数据，跳过G列公式填充")
 
-        # 10、填充今日完成数公式
+        # 9、填充今日完成数公式
         print("🔹 填充通报工作表今日完成数公式（G3~G14）")
         try:
             # 定位通报工作表
@@ -462,6 +364,8 @@ def process_device_list():
             pass
         pythoncom.CoUninitialize()
         return False
+
+
 def process_lessee_list():
     """处理租户电流数据：批量写入移动/联通/电信子表，仅导入A-P列，保留表头，批量公式+格式
     重点：长数字列禁用科学计数法，完整显示 + 三个文件数据追加合并（不覆盖）
@@ -642,8 +546,10 @@ def process_lessee_list():
             # ==============================================
             if data_rows > 0:
                 # 相对引用公式，自动适配行号
-                sht_target.Range(f"R{insert_start_row}:R{insert_start_row + data_rows - 1}").Formula = f"=E{insert_start_row}&Q{insert_start_row}"
-                sht_target.Range(f"S{insert_start_row}:S{insert_start_row + data_rows - 1}").Formula = f"=N{insert_start_row}"
+                sht_target.Range(
+                    f"R{insert_start_row}:R{insert_start_row + data_rows - 1}").Formula = f"=E{insert_start_row}&Q{insert_start_row}"
+                sht_target.Range(
+                    f"S{insert_start_row}:S{insert_start_row + data_rows - 1}").Formula = f"=N{insert_start_row}"
                 print(f"   ✅ R/S列批量公式写入完成")
 
         # ==============================
@@ -828,7 +734,6 @@ def process_lessee_list():
             import traceback
             traceback.print_exc()
 
-
         # ==============================
         # 保存退出
         # ==============================
@@ -861,6 +766,7 @@ def process_lessee_list():
     print("\n✅ 全部电流数据处理完成！数据已全新写入无残留！")
     return True
 
+
 if __name__ == '__main__':
-    # process_device_list()
-    process_lessee_list()
+    process_device_list()
+# process_lessee_list()

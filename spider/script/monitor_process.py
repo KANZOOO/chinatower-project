@@ -43,9 +43,7 @@ def load_excel_data(file_path, sheet_name=0):
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"文件不存在：{file_path}")
         dtype_spec = {"设备编码": str, "站址资源编码": str}
-        df_temp = pd.read_excel(file_path, sheet_name=sheet_name, nrows=0)
-        valid_dtype = {k: v for k, v in dtype_spec.items() if k in df_temp.columns}
-        df = pd.read_excel(file_path, sheet_name=sheet_name, dtype=valid_dtype, na_filter=False)
+        df = pd.read_excel(file_path, sheet_name=sheet_name, dtype=dtype_spec, na_filter=False)
         df = df.fillna("")
         for col in ["设备编码", "站址资源编码"]:
             if col in df.columns:
@@ -187,10 +185,29 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
                 if col_name in df_valid.columns:
                     df_valid[col_name] = df_valid[col_name].apply(lambda x: f"'{x}" if x.strip() else x)
 
+        # 性能优化：一次性写入所有数据，而不是逐列写入
+        sorted_cols = []
         for col_name in valid_cols:
-            col_idx = header_dict[col_name]
-            col_data = df_valid[col_name].tolist()
-            ws.range((2, col_idx), (data_rows + 1, col_idx)).value = [[val] for val in col_data]
+            if col_name in header_dict:
+                sorted_cols.append(col_name)
+        
+        if sorted_cols:
+            sorted_col_indices = [header_dict[col] for col in sorted_cols]
+            min_col, max_col = min(sorted_col_indices), max(sorted_col_indices)
+            
+            # 创建空的数据矩阵
+            data_matrix = [[""] * (max_col - min_col + 1) for _ in range(data_rows)]
+            
+            # 填充数据
+            for col_idx, col_name in enumerate(sorted_cols):
+                if col_name in df_valid.columns:
+                    target_col_pos = sorted_col_indices[col_idx] - min_col
+                    col_data = df_valid[col_name].tolist()
+                    for row_idx in range(data_rows):
+                        data_matrix[row_idx][target_col_pos] = col_data[row_idx]
+            
+            # 一次性写入
+            ws.range((2, min_col), (data_rows + 1, max_col)).value = data_matrix
 
         # 3.1 是否临时入网
         if "是否临时入网" in header_dict and "设备编码" in header_dict:
@@ -262,12 +279,60 @@ def update_camera_sheet_with_xlwings(target_excel_path, sheet_name, df_updated):
                 clear_count = mask.sum()
 
                 if mask.any():
-                    for row_idx in mask[mask].index:
-                        row_num = row_idx + 2
-                        if "分管维护员" in header_dict:
-                            ws.range((row_num, header_dict["分管维护员"])).value = ""
-                        if "区域" in header_dict:
-                            ws.range((row_num, header_dict["区域"])).value = ""
+                    # 批量清空分管维护员和区域列（性能优化：一次性处理）
+                    leader_col_idx = header_dict["分管维护员"]
+                    area_col_idx = header_dict["区域"]
+                    
+                    # 读取当前两列的值
+                    leader_values = ws.range((2, leader_col_idx), (data_rows + 1, leader_col_idx)).value
+                    area_values = ws.range((2, area_col_idx), (data_rows + 1, area_col_idx)).value
+                    
+                    # 确保leader_values和area_values是列表格式
+                    if not isinstance(leader_values, (list, tuple)):
+                        leader_values = [[leader_values]] if leader_values is not None else []
+                    if not isinstance(area_values, (list, tuple)):
+                        area_values = [[area_values]] if area_values is not None else []
+                    
+                    # 批量更新
+                    new_leader_values = []
+                    new_area_values = []
+                    
+                    # 使用data_rows作为安全的长度限制
+                    safe_length = min(len(mask), data_rows)
+                    
+                    for i in range(safe_length):
+                        # 安全获取mask值
+                        mask_val = False
+                        if i < len(mask):
+                            mask_val = mask.iloc[i]
+                        
+                        if mask_val:
+                            new_leader_values.append([""])
+                            new_area_values.append([""])
+                        else:
+                            # 安全获取leader和area值
+                            leader_val = ""
+                            if i < len(leader_values):
+                                if isinstance(leader_values[i], (list, tuple)):
+                                    leader_val = leader_values[i][0] if leader_values[i] else ""
+                                else:
+                                    leader_val = leader_values[i] if leader_values[i] is not None else ""
+                            
+                            area_val = ""
+                            if i < len(area_values):
+                                if isinstance(area_values[i], (list, tuple)):
+                                    area_val = area_values[i][0] if area_values[i] else ""
+                                else:
+                                    area_val = area_values[i] if area_values[i] is not None else ""
+                            
+                            new_leader_values.append([leader_val])
+                            new_area_values.append([area_val])
+                    
+                    # 批量写回
+                    if new_leader_values:
+                        ws.range((2, leader_col_idx), (data_rows + 1, leader_col_idx)).value = new_leader_values
+                    if new_area_values:
+                        ws.range((2, area_col_idx), (data_rows + 1, area_col_idx)).value = new_area_values
 
                     # 备份
                     backup_sheet = "摄像头总清单_核减备份"
@@ -391,12 +456,29 @@ def update_camera_offline_list(target_excel_path):
         header_range = ws.range("1:1").value
         header_dict = {col: idx + 1 for idx, col in enumerate(header_range) if col}
 
-        # 写入数据
+        # 性能优化：一次性写入所有数据，而不是逐列写入
+        sorted_cols = []
         for field in keep_fields:
             if field in header_dict:
-                col_idx = header_dict[field]
-                col_data = df_processed[field].tolist()
-                ws.range((2, col_idx), (data_rows + 1, col_idx)).value = [[val] for val in col_data]
+                sorted_cols.append(field)
+        
+        if sorted_cols:
+            sorted_col_indices = [header_dict[col] for col in sorted_cols]
+            min_col, max_col = min(sorted_col_indices), max(sorted_col_indices)
+            
+            # 创建空的数据矩阵
+            data_matrix = [[""] * (max_col - min_col + 1) for _ in range(data_rows)]
+            
+            # 填充数据
+            for col_idx, field in enumerate(sorted_cols):
+                if field in df_processed.columns:
+                    target_col_pos = sorted_col_indices[col_idx] - min_col
+                    col_data = df_processed[field].tolist()
+                    for row_idx in range(data_rows):
+                        data_matrix[row_idx][target_col_pos] = col_data[row_idx]
+            
+            # 一次性写入
+            ws.range((2, min_col), (data_rows + 1, max_col)).value = data_matrix
 
         # 生成公式字段
         # 11.1 离线天数公式
@@ -405,18 +487,15 @@ def update_camera_offline_list(target_excel_path):
             recent_offline_col = header_dict["通道最近离线时间"]
             recent_offline_col_letter = ws.range((1, recent_offline_col)).address.replace("$1", "").replace("$", "")
             formula = f'=IF({recent_offline_col_letter}2="","",TODAY()-INT({recent_offline_col_letter}2))'
-            ws.range((2, offline_days_col)).formula = formula
-            if data_rows > 1:
-                ws.range((2, offline_days_col)).autofill(
-                    ws.range((2, offline_days_col), (data_rows + 1, offline_days_col)))
+            formula_range = ws.range((2, offline_days_col), (data_rows + 1, offline_days_col))
+            formula_range.formula = formula
 
         # 11.2 区域公式
         if "区域" in header_dict:
             area_col = header_dict["区域"]
             formula = f'=VLOOKUP(B2,摄像头总清单!B:K,8,0)'
-            ws.range((2, area_col)).formula = formula
-            if data_rows > 1:
-                ws.range((2, area_col)).autofill(ws.range((2, area_col), (data_rows + 1, area_col)))
+            formula_range = ws.range((2, area_col), (data_rows + 1, area_col))
+            formula_range.formula = formula
 
         # 11.3 网关在线情况公式
         if "网关在线情况" in header_dict and "设备编码" in header_dict:
@@ -424,10 +503,8 @@ def update_camera_offline_list(target_excel_path):
             code_col = header_dict["设备编码"]
             code_col_letter = ws.range((1, code_col)).address.replace("$1", "").replace("$", "")
             formula = f'=IF(ISNA(VLOOKUP({code_col_letter}2,网关离线清单!A:A,1,0)),"在线","网关离线")'
-            ws.range((2, gateway_status_col)).formula = formula
-            if data_rows > 1:
-                ws.range((2, gateway_status_col)).autofill(
-                    ws.range((2, gateway_status_col), (data_rows + 1, gateway_status_col)))
+            formula_range = ws.range((2, gateway_status_col), (data_rows + 1, gateway_status_col))
+            formula_range.formula = formula
 
         # 11.4 是否代维处理公式
         if "是否代维处理" in header_dict and "设备编码" in header_dict:
@@ -435,17 +512,15 @@ def update_camera_offline_list(target_excel_path):
             code_col = header_dict["设备编码"]
             code_col_letter = ws.range((1, code_col)).address.replace("$1", "").replace("$", "")
             formula = f'=VLOOKUP({code_col_letter}2,摄像头总清单!$A$2:$L$44393,12,0)'
-            ws.range((2, dv_col)).formula = formula
-            if data_rows > 1:
-                ws.range((2, dv_col)).autofill(ws.range((2, dv_col), (data_rows + 1, dv_col)))
+            formula_range = ws.range((2, dv_col), (data_rows + 1, dv_col))
+            formula_range.formula = formula
 
         # 11.5 分管维护员公式
         if "分管维护员" in header_dict:
             leader_col = header_dict["分管维护员"]
             formula = f'=VLOOKUP(B2,摄像头总清单!B:K,9,0)'
-            ws.range((2, leader_col)).formula = formula
-            if data_rows > 1:
-                ws.range((2, leader_col)).autofill(ws.range((2, leader_col), (data_rows + 1, leader_col)))
+            formula_range = ws.range((2, leader_col), (data_rows + 1, leader_col))
+            formula_range.formula = formula
 
         # 11.6 临时入网实际安装站公式
         if "临时入网实际安装站" in header_dict and "设备编码" in header_dict:
@@ -453,9 +528,8 @@ def update_camera_offline_list(target_excel_path):
             code_col = header_dict["设备编码"]
             code_col_letter = ws.range((1, code_col)).address.replace("$1", "").replace("$", "")
             formula = f'=VLOOKUP({code_col_letter}2,摄像头总清单!$A$2:$G$44393,7,0)'
-            ws.range((2, temp_site_col)).formula = formula
-            if data_rows > 1:
-                ws.range((2, temp_site_col)).autofill(ws.range((2, temp_site_col), (data_rows + 1, temp_site_col)))
+            formula_range = ws.range((2, temp_site_col), (data_rows + 1, temp_site_col))
+            formula_range.formula = formula
 
         # 11.7 备注公式
         if "备注" in header_dict and "设备编码" in header_dict:
@@ -463,17 +537,15 @@ def update_camera_offline_list(target_excel_path):
             code_col = header_dict["设备编码"]
             code_col_letter = ws.range((1, code_col)).address.replace("$1", "").replace("$", "")
             formula = f'=VLOOKUP({code_col_letter}2,核减清单!$A$1:$C$10537,3,0)'
-            ws.range((2, remark_col)).formula = formula
-            if data_rows > 1:
-                ws.range((2, remark_col)).autofill(ws.range((2, remark_col), (data_rows + 1, remark_col)))
+            formula_range = ws.range((2, remark_col), (data_rows + 1, remark_col))
+            formula_range.formula = formula
 
         # 11.8 片区公式
         if "片区" in header_dict:
             region_col = header_dict["片区"]
             formula = f'=VLOOKUP(B2,摄像头总清单!B:K,10,0)'
-            ws.range((2, region_col)).formula = formula
-            if data_rows > 1:
-                ws.range((2, region_col)).autofill(ws.range((2, region_col), (data_rows + 1, region_col)))
+            formula_range = ws.range((2, region_col), (data_rows + 1, region_col))
+            formula_range.formula = formula
 
         # 11.9 考核核减公式
         if "考核核减" in header_dict and "备注" in header_dict:
@@ -481,9 +553,8 @@ def update_camera_offline_list(target_excel_path):
             remark_col = header_dict["备注"]
             remark_col_letter = ws.range((1, remark_col)).address.replace("$1", "").replace("$", "")
             formula = f'=IF({remark_col_letter}2="","","核减")'
-            ws.range((2, check_col)).formula = formula
-            if data_rows > 1:
-                ws.range((2, check_col)).autofill(ws.range((2, check_col), (data_rows + 1, check_col)))
+            formula_range = ws.range((2, check_col), (data_rows + 1, check_col))
+            formula_range.formula = formula
 
         # 11.10 是否超7天公式
         if "是否超7天" in header_dict and "离线天数" in header_dict:

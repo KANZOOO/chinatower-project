@@ -20,11 +20,15 @@ from core.config import settings
 
 
 
+# ===================== 从数据库获取 Cookie（不再手动修改） =====================
+def get_foura_cookie(cookie_id="wx-yeping6"):
+    """从MySQL数据库获取Cookie"""
+    db = sql_orm()
+    cookie_result = db.get_cookies(cookie_id)
+    return cookie_result["cookies"]
 
-
-# ===================== 全局统一配置（只改这里就行） =====================
-# 全局唯一 Cookie（所有请求共用）
-cookies_str = "Hm_lvt_f6097524da69abc1b63c9f8d19f5bd5b=1774852953,1774919641; route=defde8364bfd626c504a6f0f1d69536f; JSESSIONID=0FE973806D7945E2D121B115116F3C64; pwdaToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJSRVMiLCJpc3MiOiJXUzRBIiwiZXhwIjoxNzc2MDU1MzIxLCJOQU5PU0VDT05EIjoyMzc5MjI2Mzg3NTY1ODEwfQ.dX6GvF_3XpM0eEWX5cxTm4AtBYWKaGYbGxNGgz6M7IA; acctId=100852210; uid=dw.rj.fengsw; moduleUrl=/layout/index.xhtml; nodeInformation=172.29.105.18:all8080; BIGipServerywjk_new_pool1=276897196.10275.0000"
+# 从数据库获取 Cookie
+cookies_str = get_foura_cookie()
 
 # 全局统一请求头
 GLOBAL_HEADERS = {

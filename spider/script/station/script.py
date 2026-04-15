@@ -43,7 +43,7 @@ class ZhiLianTongBao:
 
 def main():
     zhi_lian_tongbao = ZhiLianTongBao()
-    zhi_lian_tongbao.run_down()
+    # zhi_lian_tongbao.run_down()
     zhi_lian_tongbao.process()
 
 
@@ -83,5 +83,5 @@ def schedule_loop():
 
 if __name__ == '__main__':
     main()
-    schedule_loop()
+    # schedule_loop()
 
