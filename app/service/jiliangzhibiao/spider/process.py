@@ -688,6 +688,146 @@ def process_lessee_list():
                 print(f"   ✅ {sheet_name} 格式处理完成")
             except Exception as e:
                 print(f"   ⚠️ {sheet_name} 格式处理失败：{str(e)}")
+        # 结算配置和实际共享情况
+        print("\n📌 开始处理结算配置和实际共享情况子表...")
+        try:
+            sht_settlement = wb_target.Sheets("结算配置和实际共享情况")
+            last_row_settlement = sht_settlement.UsedRange.Rows.Count if sht_settlement.UsedRange.Rows.Count else 1
+
+            if last_row_settlement >= 2:
+                print("   🔹 批量写入 L/M/N 列 VLOOKUP 公式（按J列判断）")
+
+                # --------------------------
+                # 🔥 终极方案：只更新符合条件的行，其余完全保留原有数据
+                # --------------------------
+                # 1. 一次性读取J列所有数据
+                j_data = sht_settlement.Range(f"J2:J{last_row_settlement}").Value
+
+                # 2. 只记录【符合条件】的行号 + 公式（不符合的直接跳过）
+                update_rows = []  # 存储要更新的行号
+                l_formulas = []
+                m_formulas = []
+                n_formulas = []
+
+                for idx, item in enumerate(j_data):
+                    row_num = idx + 2  # 真实行号
+                    j_val = str(item[0]).strip() if (item and item[0] is not None) else ""
+
+                    # ✅ 只处理这2种，其余全部跳过，保留原有数据！
+                    if j_val in ["分路计量设备", "开关电源"]:
+                        update_rows.append(row_num)
+                        l_formulas.append([f"=VLOOKUP(K{row_num},移动电流!R:S,2,0)"])
+                        m_formulas.append([f"=VLOOKUP(K{row_num},联通电流!R:S,2,0)"])
+                        n_formulas.append([f"=VLOOKUP(K{row_num},电信电流!R:S,2,0)"])
+
+                # 3. 🔥 只批量写入【符合条件的行】，其他行完全不动！
+                if update_rows:
+                    # 批量写入L/M/N
+                    sht_settlement.Range(f"L{update_rows[0]}:L{update_rows[-1]}").Formula = l_formulas
+                    sht_settlement.Range(f"M{update_rows[0]}:M{update_rows[-1]}").Formula = m_formulas
+                    sht_settlement.Range(f"N{update_rows[0]}:N{update_rows[-1]}").Formula = n_formulas
+
+                # # 3. 一次性批量写入Excel（只交互1次，巨快）
+                # if l_formulas:
+                #     # 🔥 关键：只写入有公式的行，不覆盖原有数据
+                #     sht_settlement.Range(f"L2:L{last_row_settlement}").Formula = l_formulas
+                #     sht_settlement.Range(f"M2:M{last_row_settlement}").Formula = m_formulas
+                #     sht_settlement.Range(f"N2:N{last_row_settlement}").Formula = n_formulas
+
+                # --------------------------
+                # O/P/Q/R 列 批量写入公式
+                # --------------------------
+                print("   🔹 批量写入 O/P/Q/R 列判断公式")
+                # O列 = 15
+                sht_settlement.Range(
+                    f"O2:O{last_row_settlement}").Formula = '=IF(G2="移动",IF(L2>0,"匹配","不匹配"),IF(L2>0,"不匹配","匹配"))'
+                # P列 = 16
+                sht_settlement.Range(
+                    f"P2:P{last_row_settlement}").Formula = '=IF(H2="联通",IF(M2>0,"匹配","不匹配"),IF(M2>0,"不匹配","匹配"))'
+                # Q列 = 17
+                sht_settlement.Range(
+                    f"Q2:Q{last_row_settlement}").Formula = '=IF(I2="电信",IF(N2>0,"匹配","不匹配"),IF(N2>0,"不匹配","匹配"))'
+                # R列 = 18
+                sht_settlement.Range(
+                    f"R2:R{last_row_settlement}").Formula = '=IF(O2="匹配",IF(P2="匹配",IF(Q2="匹配","整改完成","FALSE")))'
+
+                # # --------------------------
+                # # S列：如果为空 → 填入“数据正常”
+                # # --------------------------
+                # print("   🔹 S列空值填充：数据正常")
+                # # S列 = 19
+                # sht_settlement.Range(f"S2:S{last_row_settlement}").Formula = '=IF(S2="","数据正常",S2)'
+
+                # 强制计算
+                excel.Calculate()
+
+                # 设置数值格式
+                print("   🔹 设置 L/M/N 列为数值格式 0.00")
+                for col in [12, 13, 14]:
+                    sht_settlement.Columns(col).NumberFormat = "0.00"
+
+                # 替换 #N / -2146826246 / 0 / 0.00 为空
+                print("   🔹 替换无效值为空")
+                for col_idx in [12, 13, 14]:
+                    rng = sht_settlement.Range(sht_settlement.Cells(2, col_idx),
+                                               sht_settlement.Cells(last_row_settlement, col_idx))
+                    vals = rng.Value or []
+                    new_vals = []
+                    for v in vals:
+                        cell_val = v[0] if isinstance(v, (list, tuple)) else v
+
+                        # 🔥 关键修复：增加 -2146826246 判断（#N/A 错误码）
+                        if cell_val == -2146826246 or \
+                                (isinstance(cell_val, str) and cell_val == "#N/A") or \
+                                (isinstance(cell_val, (int, float)) and cell_val == 0) or \
+                                (cell_val == "0.00"):
+                            new_vals.append([""])
+                        else:
+                            new_vals.append([cell_val])
+                    if new_vals:
+                        rng.Value = new_vals
+
+                # --------------------------
+                # 🔥 最终版：保留 W/Z 原始数据，仅更新符合条件的行
+                # --------------------------
+                print("   🔹 按条件写入 W列处理时间 / Z列故障数时间（保留原有数据）")
+                current_time = datetime.now().strftime("%Y-%m-%d")
+
+                # 批量读取 R、S、W、Z 四列原始数据
+                rng = sht_settlement.Range(f"R2:Z{last_row_settlement}")
+                data = rng.Value if rng.Value else []
+
+                # 遍历每一行，保留原始数据，只改符合条件的
+                for row_idx in range(len(data)):
+                    row = data[row_idx]
+                    # 读取各列值
+                    r_val = str(row[0]).strip() if row[0] is not None else ""
+                    s_val = str(row[1]).strip() if row[1] is not None else ""
+                    w_old = row[4]  # W列原始值
+                    z_old = row[7]  # Z列原始值
+
+                    # ======================
+                    # 规则 1：只在满足条件时更新
+                    # ======================
+                    if r_val == "整改完成" and s_val == "维护处理":
+                        # W列写入新时间，Z列保持原样
+                        sht_settlement.Cells(row_idx + 2, 23).Value = current_time
+
+                    elif (r_val == "False" or r_val == "FALSE") and s_val == "数据正常":
+                        # Z列写入新时间，W列保持原样
+                        sht_settlement.Cells(row_idx + 2, 26).Value = current_time
+
+                    # 不满足条件：什么都不做，保留原始数据！
+
+                print(f"   ✅ 处理完成：共 {last_row_settlement - 1} 行")
+            else:
+                print("   ⚠️ 子表无数据，跳过")
+
+        except Exception as e:
+            print(f"   ❌ 失败：{str(e)}")
+            import traceback
+            traceback.print_exc()
+
 
         # ==============================
         # 保存退出
