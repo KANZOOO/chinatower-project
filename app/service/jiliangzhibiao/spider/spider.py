@@ -20,15 +20,28 @@ from core.config import settings
 
 
 
-# ===================== 从数据库获取 Cookie（不再手动修改） =====================
-def get_foura_cookie(cookie_id="wx-yeping6"):
-    """从MySQL数据库获取Cookie"""
+# ===================== 从数据库获取 Cookie（完全像 model.py 一样） =====================
+def get_foura_cookie(cookie_id="dw.rj.fengsw"):
+    """从MySQL数据库获取Cookie - 完全参考 model.py"""
     db = sql_orm()
     cookie_result = db.get_cookies(cookie_id)
     return cookie_result["cookies"]
 
-# 从数据库获取 Cookie
-cookies_str = get_foura_cookie()
+# 【关键修改】像 model.py 一样，直接获取字典格式的 Cookie
+cookie_dict_raw = get_foura_cookie()
+
+# 【彻底清理】清理字典中的键和值，去除首尾空格和换行
+GLOBAL_COOKIE_DICT = {}
+for k, v in cookie_dict_raw.items():
+    clean_key = str(k).strip()
+    clean_value = str(v).strip()
+    # 去除值中的\r和\n
+    clean_value = clean_value.replace('\r', '').replace('\n', '')
+    GLOBAL_COOKIE_DICT[clean_key] = clean_value
+
+# 生成干净的字符串格式
+cookies_str = "; ".join([f"{k}={v}" for k, v in GLOBAL_COOKIE_DICT.items()])
+
 
 # 全局统一请求头
 GLOBAL_HEADERS = {
@@ -50,17 +63,25 @@ def parse_cookie(cookie_str):
     """解析 Cookie 字符串为字典（全局共用）"""
     cookies = {}
     try:
+        # 确保是字符串类型
+        if not isinstance(cookie_str, str):
+            cookie_str = str(cookie_str)
+        
         for item in cookie_str.split(";"):
             item = item.strip()
             if not item:
                 continue
-            key, value = item.split("=", 1)
-            cookies[key] = value
+            # 使用 split('=', 1) 只分割第一个等号，避免值中包含等号的问题
+            if "=" in item:
+                key, value = item.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                cookies[key] = value
     except Exception as e:
         print(f"Cookie 解析失败：{e}")
+        import traceback
+        traceback.print_exc()
     return cookies
-
-GLOBAL_COOKIE_DICT = parse_cookie(cookies_str)
 
 def retry(max_attempts=15, delay=2):
     """重试装饰器"""
