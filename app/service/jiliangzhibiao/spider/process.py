@@ -769,4 +769,4 @@ def process_lessee_list():
 
 if __name__ == '__main__':
     process_device_list()
-# process_lessee_list()
+    process_lessee_list()
