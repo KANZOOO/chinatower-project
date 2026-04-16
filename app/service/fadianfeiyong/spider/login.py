@@ -12,7 +12,7 @@ class quxin_login():
     def __init__(self,quxin_session=Session()):
         self.username="nanning_oil"
         self.password="Guangxiyj@123!@#"
-        self.pickle_quxin =settings.resolve_path("spider/down/pickle_quxin.pkl")
+        self.pickle_quxin =settings.resolve_path("app/service/fadianfeiyong/spider/down/pickle_quxin.pkl")
         self.session_quxin=quxin_session
         self.session_quxin.headers.update({
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
