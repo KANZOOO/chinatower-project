@@ -572,7 +572,7 @@ def update_camera_offline_list(target_excel_path):
         wb.app.calculate()
         wb.screen_updating = True
         wb.save()
-        print(f"✅ 摄像头数据处理完成")
+        print(f"摄像头数据处理完成")
 
     except Exception as e:
         print(f"❌ 离线清单更新失败：{e}")

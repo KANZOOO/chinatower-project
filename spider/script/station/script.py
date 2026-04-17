@@ -2,6 +2,7 @@
 from core.config import settings
 from spider.script.model import down_file
 from spider.script.gateway_process import process_gateway_main_list
+from spider.script.gateway_process import update_gateway_offline_list
 from spider.script.monitor_process import process_camera_main_list
 from spider.schema.schema import zhineng_wangguan, zhineng_shexiangtou
 import schedule
@@ -22,19 +23,17 @@ class ZhiLianTongBao:
     def run_down(self):
         wangguan_url = "http://omms.chinatowercom.cn:9000/business/resMge/devMge/listEdgeGateway.xhtml"
         self.down(url=wangguan_url, data=zhineng_wangguan, path=self.path_wangguan)
-        print(f"✅ 网关数据下载成功")
+        print(f" 网关数据下载成功")
         
         shexiangtou_url = "http://omms.chinatowercom.cn:9000/business/resMge/devMge/listEdgeGatewayDev.xhtml"
         self.down(url=shexiangtou_url, data=zhineng_shexiangtou, path=self.path_shexiangtou)
-        print(f"✅ 摄像头数据下载成功")
+        print(f" 摄像头数据下载成功")
     
     def process(self):
-        gateway_result = process_gateway_main_list()
-        if gateway_result:
-            print("✅ 网关数据处理完成")
-        camera_result = process_camera_main_list()
-        if camera_result:
-            print("✅ 摄像头数据处理完成")
+        process_gateway_main_list()
+        update_gateway_offline_list()
+        process_camera_main_list()
+        print("数据处理完成")
     
     def main_task(self):
         """完整的下载 + 处理流程"""
