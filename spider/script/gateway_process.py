@@ -515,14 +515,13 @@ def update_gateway_sheet_with_pywin32(target_excel_path, sheet_name, df_updated)
         i_formulas = [[f"=VLOOKUP(G{row_idx},数据源!V:Z,2,0)"] for row_idx in range(2, data_rows + 2)]
         ws.Range(ws.Cells(2, 8), ws.Cells(data_rows + 1, 8)).Formula = _to_excel_matrix(h_formulas)
         ws.Range(ws.Cells(2, 9), ws.Cells(data_rows + 1, 9)).Formula = _to_excel_matrix(i_formulas)
-        print(f"H/I公式写入完成，行数：{data_rows}")
+
 
         # 固定列规则：若 L 列（核减）有有效值，则清空对应行 H/I；否则保留 H/I（含公式）。
         # 不再做Python侧键值匹配，直接以Excel计算后的L列显示结果为准。
         # 注意：这里必须逐行读单元格Text，避免多单元格Range.Text在COM下失真。
         app.Calculate()
         reduce_col = header_dict.get("核减", 12)
-        print(f"网关总清单关键列：设备编码列={header_dict.get('设备编码', 'NOT_FOUND')}，核减列={reduce_col}")
 
         clear_rows = []
         blank_rows = 0
@@ -537,9 +536,7 @@ def update_gateway_sheet_with_pywin32(target_excel_path, sheet_name, df_updated)
                 na_rows += 1
                 continue
             clear_rows.append(row_no)
-        print(
-            f"L列识别统计：空白={blank_rows}，错误值={na_rows}，有效匹配={len(clear_rows)}（将清空H/I）"
-        )
+
 
         if clear_rows:
             for start_row, end_row in _contiguous_ranges(clear_rows):
@@ -602,6 +599,18 @@ def process_gateway_main_list():
         sheet_name="网关总清单",
         df_updated=df_updated,
     )
+
+
+def process_gateway_full_list():
+    """
+    对齐 monitor_process.py 的组织方式：
+    一个入口串行执行网关三步，固定顺序为
+    1) 通报各区
+    2) 网关总清单
+    3) 网关离线清单
+    """
+    process_gateway_main_list()
+    update_gateway_offline_list()
 
 
 def update_gateway_offline_list():
@@ -766,5 +775,4 @@ def update_gateway_offline_list():
 
 
 if __name__ == "__main__":
-    process_gateway_main_list()
-    update_gateway_offline_list()
+    process_gateway_full_list()

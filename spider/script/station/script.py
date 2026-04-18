@@ -1,12 +1,10 @@
-# import os
 from core.config import settings
 from spider.script.model import down_file
-from spider.script.gateway_process import process_gateway_main_list
-from spider.script.gateway_process import update_gateway_offline_list
-from spider.script.monitor_process import process_camera_main_list
 from spider.schema.schema import zhineng_wangguan, zhineng_shexiangtou
 import schedule
 import time
+import subprocess
+import sys
 from threading import Thread
 
 class ZhiLianTongBao:
@@ -14,6 +12,27 @@ class ZhiLianTongBao:
         self.path_wangguan=settings.resolve_path("spider/script/station/down/边缘网关.xls")
         self.path_shexiangtou=settings.resolve_path("spider/script/station/down/边缘摄像头.xls")
     
+    def _run_step_subprocess(self, step_name, code):
+        """
+        将每个处理步骤放到独立Python子进程中执行，隔离Excel COM状态，
+        避免pywin32与xlwings在同一进程串行运行时造成工作簿数据异常。
+        """
+        print(f"开始执行：{step_name}")
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.stdout:
+            print(result.stdout.rstrip())
+        if result.returncode != 0:
+            if result.stderr:
+                print(result.stderr.rstrip())
+            raise RuntimeError(f"{step_name}执行失败，退出码={result.returncode}")
+        print(f"执行完成：{step_name}")
+
     def down(self, url, data, path):
         for key, into_data in data.items():
             if key in ['INTO_DATA_1', 'INTO_DATA_2', 'INTO_DATA_FINAL']:
@@ -30,9 +49,15 @@ class ZhiLianTongBao:
         print(f" 摄像头数据下载成功")
     
     def process(self):
-        process_gateway_main_list()
-        update_gateway_offline_list()
-        process_camera_main_list()
+        # 注意：网关(pywin32)与摄像头(xlwings)处理放到不同子进程，避免Excel实例冲突导致数据错乱。
+        self._run_step_subprocess(
+            "网关全流程处理",
+            "from spider.script.gateway_process import process_gateway_full_list; process_gateway_full_list()",
+        )
+        self._run_step_subprocess(
+            "摄像头清单处理",
+            "from spider.script.monitor_process import process_camera_main_list; process_camera_main_list()",
+        )
         print("数据处理完成")
     
     def main_task(self):
