@@ -1,90 +1,93 @@
+import copy
 import os
-import re
 import time
-import requests
-import numpy as np
-import pandas as pd
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import wraps
-from xlsx2csv import Xlsx2csv
-from core.sql import sql_orm
+
+import requests
+from bs4 import BeautifulSoup
+
 from core.config import settings
+from core.sql import sql_orm
+from app.service.jiliangzhibiao.spider.schema.schema_jilianghzibiao import (
+    dianxin_jiliang,
+    dianxin_jiliang5g,
+    dianxin_kaiguan,
+    liantong_jiliang,
+    liantong_jiliang5g,
+    liantong_kaiguan,
+    yidong_jiliang,
+    yidong_jiliang5g,
+    yidong_kaiguan,
+)
 
-"""
-合并完成版：统一 Cookie、统一会话、所有请求共享一套登录信息
-包含两个爬虫：
-1. 分流计量数据下载（双请求）
-2. 租户电流数据下载（9 个文件）- 来自原 model.py
-"""
+
+DEFAULT_COOKIE_ID = "dw.rj.fengsw"
+BASE_URL = "http://omms.chinatowercom.cn:9000"
+PERFORMANCE_URL = f"{BASE_URL}/business/resMge/pwMge/performanceMge/perfdata.xhtml"
+SHUNT_QUERY_URL = f"{BASE_URL}/devMge/getShuntMeteringData.go"
+SHUNT_EXPORT_URL = f"{BASE_URL}/devMge/exportSMDataExcel.go?ids=1"
 
 
+LESSEE_DOWNLOAD_TASKS = [
+    ("分路计量设备-移动租户电流", yidong_jiliang, "分路计量设备-移动租户电流.xls"),
+    ("开关电源-移动租户电流", yidong_kaiguan, "开关电源-移动租户电流.xls"),
+    ("分路计量设备-移动租户电流（5G）", yidong_jiliang5g, "分路计量设备-移动租户电流（5G）.xls"),
+    ("分路计量设备-联通租户电流", liantong_jiliang, "分路计量设备-联通租户电流.xls"),
+    ("开关电源-联通租户电流", liantong_kaiguan, "开关电源-联通租户电流.xls"),
+    ("分路计量设备-联通租户电流（5G）", liantong_jiliang5g, "分路计量设备-联通租户电流（5G）.xls"),
+    ("分路计量设备-电信租户电流", dianxin_jiliang, "分路计量设备-电信租户电流.xls"),
+    ("开关电源-电信租户电流", dianxin_kaiguan, "开关电源-电信租户电流.xls"),
+    ("分路计量设备-电信租户电流（5G）", dianxin_jiliang5g, "分路计量设备-电信租户电流（5G）.xls"),
+]
 
-# ===================== 从数据库获取 Cookie（完全像 model.py 一样） =====================
-def get_foura_cookie(cookie_id="dw.rj.fengsw"):
-    """从MySQL数据库获取Cookie - 完全参考 model.py"""
+
+def _clean_cookie_dict(raw_cookie_dict):
+    cleaned = {}
+    for key, value in (raw_cookie_dict or {}).items():
+        k = str(key).strip()
+        v = str(value).strip().replace("\r", "").replace("\n", "")
+        if k:
+            cleaned[k] = v
+    return cleaned
+
+
+def get_cookie_dict(cookie_id=DEFAULT_COOKIE_ID):
+    """从 MySQL 中读取并清洗 Cookie 字典。"""
     db = sql_orm()
     cookie_result = db.get_cookies(cookie_id)
-    return cookie_result["cookies"]
-
-# 【关键修改】像 model.py 一样，直接获取字典格式的 Cookie
-cookie_dict_raw = get_foura_cookie()
-
-# 【彻底清理】清理字典中的键和值，去除首尾空格和换行
-GLOBAL_COOKIE_DICT = {}
-for k, v in cookie_dict_raw.items():
-    clean_key = str(k).strip()
-    clean_value = str(v).strip()
-    # 去除值中的\r和\n
-    clean_value = clean_value.replace('\r', '').replace('\n', '')
-    GLOBAL_COOKIE_DICT[clean_key] = clean_value
-
-# 生成干净的字符串格式
-cookies_str = "; ".join([f"{k}={v}" for k, v in GLOBAL_COOKIE_DICT.items()])
+    return _clean_cookie_dict(cookie_result.get("cookies", {}))
 
 
-# 全局统一请求头
-GLOBAL_HEADERS = {
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "Accept-Encoding": "gzip, deflate",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-    "Connection": "keep-alive",
-    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-    "Cookie": cookies_str,
-    "Host": "omms.chinatowercom.cn:9000",
-    "Origin": "http://omms.chinatowercom.cn:9000",
-    "Referer": "http://omms.chinatowercom.cn:9000/devMge/initShuntMetering.go",
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0",
-    "X-Requested-With": "XMLHttpRequest"
-}
+def build_default_headers(cookie_dict):
+    cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
+    return {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+        "Connection": "keep-alive",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Cookie": cookie_str,
+        "Host": "omms.chinatowercom.cn:9000",
+        "Origin": BASE_URL,
+        "Referer": f"{BASE_URL}/devMge/initShuntMetering.go",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0",
+        "X-Requested-With": "XMLHttpRequest",
+    }
 
-# ===================== 通用工具函数 =====================
-def parse_cookie(cookie_str):
-    """解析 Cookie 字符串为字典（全局共用）"""
-    cookies = {}
-    try:
-        # 确保是字符串类型
-        if not isinstance(cookie_str, str):
-            cookie_str = str(cookie_str)
-        
-        for item in cookie_str.split(";"):
-            item = item.strip()
-            if not item:
-                continue
-            # 使用 split('=', 1) 只分割第一个等号，避免值中包含等号的问题
-            if "=" in item:
-                key, value = item.split("=", 1)
-                key = key.strip()
-                value = value.strip()
-                cookies[key] = value
-    except Exception as e:
-        print(f"Cookie 解析失败：{e}")
-        import traceback
-        traceback.print_exc()
-    return cookies
+
+def create_session(cookie_id=DEFAULT_COOKIE_ID):
+    cookie_dict = get_cookie_dict(cookie_id)
+    headers = build_default_headers(cookie_dict)
+
+    session = requests.Session()
+    session.headers.update(headers)
+    session.cookies.update(cookie_dict)
+    return session
+
 
 def retry(max_attempts=15, delay=2):
-    """重试装饰器"""
     def decorator_retry(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -92,110 +95,114 @@ def retry(max_attempts=15, delay=2):
             while attempts < max_attempts:
                 try:
                     return func(*args, **kwargs)
-                except Exception as e:
+                except Exception as exc:
                     attempts += 1
-                    if attempts == max_attempts:
+                    if attempts >= max_attempts:
                         raise
-                    print(f"重试 {attempts}/{max_attempts}: {str(e)[:50]}")
+                    print(f"重试 {attempts}/{max_attempts}: {str(exc)[:80]}")
                     time.sleep(delay)
+
         return wrapper
+
     return decorator_retry
 
-@retry()
-def requests_post(url, headers=GLOBAL_HEADERS, data={}, cookies=GLOBAL_COOKIE_DICT, timeout=600):
-    return requests.post(url, headers=headers, data=data, cookies=cookies, timeout=timeout)
 
 @retry()
-def requests_get(url, headers=GLOBAL_HEADERS, params={}, cookies=GLOBAL_COOKIE_DICT, timeout=600):
-    return requests.get(url, headers=headers, params=params, cookies=cookies, timeout=timeout)
+def requests_post(url, session=None, headers=None, data=None, timeout=600):
+    req_session = session or create_session()
+    return req_session.post(url, headers=headers, data=data or {}, timeout=timeout)
 
-def xlsx_to_csv(folder):
-    if not os.path.exists(folder):
-        print(f"文件夹不存在：{folder}")
-        return
-    for file in os.listdir(folder):
-        path = os.path.join(folder, file)
-        if file.endswith('.xlsx'):
-            csv_path = path.replace(".xlsx", ".csv")
-            if not os.path.exists(csv_path):
-                try:
-                    Xlsx2csv(path, outputencoding="utf-8").convert(csv_path)
-                    print(f"转换完成：{file}")
-                except Exception as e:
-                    print(f"转换失败 {file}: {e}")
 
-def concat_df(folder, output_path, gen_csv=False):
-    xlsx_to_csv(folder)
-    df_list = []
-    if not os.path.exists(folder):
-        return pd.DataFrame(), output_path
-    for file in os.listdir(folder):
-        path = os.path.join(folder, file)
-        try:
-            if '.csv' in file:
-                temp = pd.read_csv(path, dtype=str)
-                df_list.append(temp)
-            elif file.endswith('.xls'):
-                temp = pd.read_excel(path, dtype=str, engine='xlrd')
-                df_list.append(temp)
-        except:
-            pass
-    merge_df = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
-    merge_df.to_excel(output_path, index=False)
-    if gen_csv:
-        merge_df.to_csv(str(output_path).replace('.xlsx','.csv'), index=False, encoding='utf-8-sig')
-    return merge_df, output_path
+@retry()
+def requests_get(url, session=None, headers=None, params=None, timeout=600, stream=False):
+    req_session = session or create_session()
+    return req_session.get(url, headers=headers, params=params or {}, timeout=timeout, stream=stream)
 
-# ===================== 爬虫逻辑 1：通用文件下载（用于租户电流数据） =====================
-def down_file(url, data, path, conten_len_error=3000, xlsx_juge=False):
+
+def _prepare_lessee_payload(payload, access_status="02"):
+    """避免污染 schema 全局字典，每次下载前做深拷贝并设置 queryAccessStatus。"""
+    payload_copy = copy.deepcopy(payload)
+    for step_name in ("INTO_DATA_1", "INTO_DATA_2", "INTO_DATA_FINAL"):
+        if step_name in payload_copy:
+            payload_copy[step_name]["queryForm:queryAccessStatus"] = access_status
+    return payload_copy
+
+
+def down_file(url, data, path, conten_len_error=3000, xlsx_juge=False, session=None):
     """
-    下载文件，支持重试机制和文件验证
-    用于下载 9 个租户电流文件
+    通用文件下载器：用于租户电流文件导出。
+    保持原函数名与参数兼容，便于现有调用不改动。
     """
     retry_count = 3
+    req_session = session or create_session()
+    request_headers = {
+        "Host": "omms.chinatowercom.cn:9000",
+        "Origin": BASE_URL,
+        "Referer": url,
+        "User-Agent": req_session.headers.get("User-Agent", ""),
+    }
+
     while retry_count >= 0:
         try:
-            headers = {
-                'Host': 'omms.chinatowercom.cn:9000',
-                'Origin': 'http://omms.chinatowercom.cn:9000',
-                'Referer': url,
-                'User-Agent': GLOBAL_HEADERS["User-Agent"],
-            }
-            res = requests_post(url, headers=headers, cookies=GLOBAL_COOKIE_DICT)
-            html = BeautifulSoup(res.text, 'html.parser')
-            javax = html.find('input', id='javax.faces.ViewState')['value']
+            first_resp = requests_post(url, session=req_session, headers=request_headers)
+            first_resp.raise_for_status()
 
-            for key, into_data in data.items():
-                into_data['javax.faces.ViewState'] = javax
-                res = requests_post(url, headers=headers, data=into_data, cookies=GLOBAL_COOKIE_DICT)
+            html = BeautifulSoup(first_resp.text, "html.parser")
+            view_state_node = html.find("input", id="javax.faces.ViewState")
+            if not view_state_node or not view_state_node.get("value"):
+                raise ValueError("页面中未找到 javax.faces.ViewState")
 
-                if 'FINAL' in key:
-                    if len(res.content) < conten_len_error:
-                        raise ValueError("内容过小")
-                    if xlsx_juge:
-                        if not res.content.startswith((b'\x50\x4B\x03\x04', b'\x09\x08\x04\x00\x10\x00\x00\x00')):
-                            raise ValueError("非 Excel 文件")
+            javax_value = view_state_node["value"]
+
+            for step_name, step_data in data.items():
+                payload = dict(step_data)
+                payload["javax.faces.ViewState"] = javax_value
+                step_resp = requests_post(url, session=req_session, headers=request_headers, data=payload)
+                step_resp.raise_for_status()
+
+                if "FINAL" in step_name:
+                    if len(step_resp.content) < conten_len_error:
+                        raise ValueError("导出内容过小，疑似下载失败")
+                    if xlsx_juge and not step_resp.content.startswith(
+                        (b"\x50\x4B\x03\x04", b"\x09\x08\x04\x00\x10\x00\x00\x00")
+                    ):
+                        raise ValueError("返回内容不是 Excel 文件")
+
                     os.makedirs(os.path.dirname(path), exist_ok=True)
-                    with open(path, "wb") as f:
-                        f.write(res.content)
-                    print(f"✅ 下载成功：{path}")
+                    with open(path, "wb") as file_obj:
+                        file_obj.write(step_resp.content)
             return
-        except ValueError as e:
+        except Exception as exc:
             retry_count -= 1
             if retry_count < 0:
                 raise
-            print(f"重试中... {e}")
+            print(f"重试中... {exc}")
 
-# ===================== 爬虫逻辑 2：分流计量下载（双请求） =====================
-def download_shunt_meter_excel():
+
+def download_lessee_meter_excels(cookie_id=DEFAULT_COOKIE_ID, session=None):
+    """下载 9 个分路计量租户电流文件。"""
+    session = session or create_session(cookie_id=cookie_id)
+    success_count = 0
+
+    for task_name, task_payload, file_name in LESSEE_DOWNLOAD_TASKS:
+        save_path = settings.resolve_path(f"app/service/jiliangzhibiao/down/{file_name}")
+        payload = _prepare_lessee_payload(task_payload, access_status="02")
+        down_file(url=PERFORMANCE_URL, data=payload, path=save_path, session=session)
+        success_count += 1
+
+    print(f"租户电流下载完成：{success_count}/9")
+
+
+def download_shunt_meter_excel(cookie_id=DEFAULT_COOKIE_ID, session=None):
     """
-    下载分流计量数据 Excel 文件（双请求模式）
-    Returns: 保存的文件路径
+    下载分路计量设备清单（双请求模式）。
+    返回保存路径。
     """
     save_path = settings.resolve_path(r"app/service/jiliangzhibiao/down/分路计量设备清单.xls")
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-    data1 = {
+    req_session = session or create_session(cookie_id=cookie_id)
+    query_payload = {
         "queryCheckTime": datetime.now().strftime("%Y-%m-%d"),
         "queryDeviceType": "",
         "queryShareFlag": "",
@@ -207,33 +214,33 @@ def download_shunt_meter_excel():
         "queryDeviceID": "",
         "queryUnitId": "",
         "page": "1",
-        "rows": "20"
+        "rows": "20",
     }
 
-    session = requests.Session()
-    session.headers.update(GLOBAL_HEADERS)
-    session.cookies.update(GLOBAL_COOKIE_DICT)
+    query_resp = requests_post(SHUNT_QUERY_URL, session=req_session, data=query_payload, timeout=30)
+    query_resp.raise_for_status()
 
-    url1 = "http://omms.chinatowercom.cn:9000/devMge/getShuntMeteringData.go"
-    resp1 = session.post(url1, data=data1, timeout=30)
-    resp1.raise_for_status()
+    export_resp = requests_get(SHUNT_EXPORT_URL, session=req_session, stream=True, timeout=60)
+    export_resp.raise_for_status()
 
-    url2 = "http://omms.chinatowercom.cn:9000/devMge/exportSMDataExcel.go?ids=1"
-    resp2 = session.get(url2, stream=True, timeout=60)
-    resp2.raise_for_status()
+    with open(save_path, "wb") as file_obj:
+        for chunk in export_resp.iter_content(1024 * 1024):
+            file_obj.write(chunk)
 
-    with open(save_path, "wb") as f:
-        for chunk in resp2.iter_content(1024*1024):
-            f.write(chunk)
-
-    print(f"\n✅ 分流计量 Excel 下载完成：{save_path}")
+    print(f"分路计量设备清单下载完成")
     return save_path
 
-# ===================== 主入口 =====================
+
+def run_all_downloads(cookie_id=DEFAULT_COOKIE_ID):
+    """一次运行同时下载：租户电流(9个) + 分路计量设备清单(1个)。"""
+    session = create_session(cookie_id=cookie_id)
+    download_lessee_meter_excels(cookie_id=cookie_id, session=session)
+    download_shunt_meter_excel(cookie_id=cookie_id, session=session)
+    print("\n全部下载任务执行完成")
+
+
 if __name__ == "__main__":
     try:
-        # 执行分流计量下载（双请求）
-        download_shunt_meter_excel()
-
-    except Exception as e:
-        print(f"\n❌ 执行失败：{e}")
+        run_all_downloads()
+    except Exception as exc:
+        print(f"\n❌ 执行失败：{exc}")

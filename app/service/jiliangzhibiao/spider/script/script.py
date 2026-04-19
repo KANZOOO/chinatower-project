@@ -1,72 +1,78 @@
 import sys
 import os
+import time
+import threading
+import schedule
 
 # 添加项目根目录到 Python 路径
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from app.service.jiliangzhibiao.spider.spider import download_shunt_meter_excel, down_file
-from app.service.jiliangzhibiao.spider.schema.schema_jilianghzibiao import yidong_jiliang,yidong_kaiguan,yidong_jiliang5g,liantong_jiliang,liantong_kaiguan,liantong_jiliang5g,dianxin_jiliang,dianxin_kaiguan,dianxin_jiliang5g
-from core.config import settings
+from app.service.jiliangzhibiao.spider.spider import run_all_downloads
+from app.service.jiliangzhibiao.spider.process import run_device_process, run_lessee_process
 
 class Jiliangzhibiao:
-    def __init__(self):
-        self.path_yidong_jiliang=settings.resolve_path("app/service/jiliangzhibiao/down/分路计量设备-移动租户电流.xls")
-        self.path_yidong_kaiguan=settings.resolve_path("app/service/jiliangzhibiao/down/开关电源-移动租户电流.xls")
-        self.path_yidong_jiliang5g=settings.resolve_path("app/service/jiliangzhibiao/down/分路计量设备-移动租户电流（5G）.xls")
-        self.path_liantong_jiliang=settings.resolve_path("app/service/jiliangzhibiao/down/分路计量设备-联通租户电流.xls")
-        self.path_liantong_kaiguan=settings.resolve_path("app/service/jiliangzhibiao/down/开关电源-联通租户电流.xls")
-        self.path_liantong_jiliang5g=settings.resolve_path("app/service/jiliangzhibiao/down/分路计量设备-联通租户电流（5G）.xls")
-        self.path_dianxin_jiliang=settings.resolve_path("app/service/jiliangzhibiao/down/分路计量设备-电信租户电流.xls")
-        self.path_dianxin_kaiguan=settings.resolve_path("app/service/jiliangzhibiao/down/开关电源-电信租户电流.xls")
-        self.path_dianxin_jiliang5g=settings.resolve_path("app/service/jiliangzhibiao/down/分路计量设备-电信租户电流（5G）.xls")
-    def down(self,url,data,path):
-        for key, into_data in data.items():
-            if key in ['INTO_DATA_1', 'INTO_DATA_2', 'INTO_DATA_FINAL']:
-                data[key]['queryForm:queryAccessStatus'] = "02"
-        down_file(url=url,
-                  data=data,
-                  path=path)
-
     def run_down(self):
-        # 分路租户异常
-        # 分路计量设备-移动租户电流数据 URL
-        url1 = "http://omms.chinatowercom.cn:9000/business/resMge/pwMge/performanceMge/perfdata.xhtml"
-        self.down(url=url1, data=yidong_jiliang, path=self.path_yidong_jiliang)
-        print(f"✅ 分路计量设备-移动租户电流数据下载成功")
-        # 开关电源-移动租户电流数据 URL
-        self.down(url=url1, data=yidong_kaiguan, path=self.path_yidong_kaiguan)
-        print(f"✅ 开关电源-移动租户电流数据下载成功")
-        # 分路计量设备-移动租户电流（5G）数据 URL
-        self.down(url=url1, data=yidong_jiliang5g, path=self.path_yidong_jiliang5g)
-        print(f"✅ 分路计量设备-移动租户电流（5G）数据下载成功")
-        # 分路计量设备-联通租户电流数据 URL
-        self.down(url=url1, data=liantong_jiliang, path=self.path_liantong_jiliang)
-        print(f"✅ 分路计量设备-联通租户电流数据下载成功")
-        # 开关电源-联通租户电流数据 URL
-        self.down(url=url1, data=liantong_kaiguan, path=self.path_liantong_kaiguan)
-        print(f"✅ 开关电源-联通租户电流数据下载成功")
-        # 分路计量设备-联通租户电流（5G）数据 URL
-        self.down(url=url1, data=liantong_jiliang5g, path=self.path_liantong_jiliang5g)
-        print(f"✅ 分路计量设备-联通租户电流（5G）数据下载成功")
-        # 分路计量设备-电信租户电流数据 URL
-        self.down(url=url1, data=dianxin_jiliang, path=self.path_dianxin_jiliang)
-        print(f"✅ 分路计量设备-电信租户电流数据下载成功")
-        # 开关电源-电信租户电流数据 URL
-        self.down(url=url1, data=dianxin_kaiguan, path=self.path_dianxin_kaiguan)
-        print(f"✅ 开关电源-电信租户电流数据下载成功")
-        # 分路计量设备-电信租户电流（5G）数据 URL
-        self.down(url=url1, data=dianxin_jiliang5g, path=self.path_dianxin_jiliang5g)
-        print(f"✅ 分路计量设备-电信租户电流（5G）数据下载成功")
-
+        # 统一调用 spider.py 中的总下载入口：
+        # 同时下载「分路计量租户数据(9个) + 分路计量设备清单(1个)」
+        run_all_downloads()
     def process(self):
-        pass
+        # 只跑设备流程：保留下一行，注释 run_lessee_process()
+        # 只跑租户流程：注释 run_device_process()，保留下一行
+        # 两个都跑：两行都保留
+        ok_device = True
+        ok_lessee = True
+        ok_device = run_device_process()
+        ok_lessee = run_lessee_process()
+        if not (ok_device and ok_lessee):
+            raise RuntimeError("jiliangzhibiao process 执行失败")
+
+    def main_task(self):
+        print("📥 run_down 开始")
+        self.run_down()
+        print("✅ run_down 完成")
+        print("⚙️ process 开始")
+        self.process()
+        print("✅ process 完成")
+
+
+def run_task_in_thread(task_func, task_name):
+    """在线程中执行任务，避免阻塞 schedule 循环。"""
+    def _runner():
+        try:
+            print(f"▶ 开始执行任务：{task_name}")
+            task_func()
+            print(f"✅ 任务完成：{task_name}")
+        except Exception as e:
+            print(f"❌ 任务失败：{task_name}，错误：{str(e)}")
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+
+
+def schedule_loop():
+    """主调度循环"""
+    print("定时任务调度器已启动")
+    print("每天 08:00 自动执行数据下载和处理")
+    zhi_lian_tongbao = Jiliangzhibiao()
+
+    schedule.every().day.at("08:00").do(
+        run_task_in_thread,
+        zhi_lian_tongbao.main_task,
+        "每天 8 点运行脚本"
+    )
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
 
 def main():
-    ji_liang_zhibiao= Jiliangzhibiao()
-    ji_liang_zhibiao.run_down()
-    download_shunt_meter_excel()
-    ji_liang_zhibiao.process()
+    ji_liang_zhibiao = Jiliangzhibiao()
+    try:
+        ji_liang_zhibiao.main_task()
+    except Exception as e:
+        print(f"❌ 脚本执行失败：{str(e)}")
+        raise
 if __name__ == '__main__':
     main()
+    schedule_loop()

@@ -1,5 +1,7 @@
 import os
 import sys
+import tempfile
+import builtins
 import pandas as pd
 import warnings
 from datetime import datetime
@@ -38,6 +40,58 @@ TEXT_FORMAT_FIELDS = [
     "运维ID"
 ]
 
+# 全局互斥锁文件：避免多个流程并发占用 Excel COM 导致冲突
+LOCK_FILE = os.path.join(tempfile.gettempdir(), "jiliangzhibiao_process.lock")
+
+
+class SingleProcessLock:
+    """基于锁文件的轻量互斥，确保同一时刻只运行一个处理任务。"""
+
+    def __init__(self, lock_file, part):
+        self.lock_file = lock_file
+        self.part = part
+        self.locked = False
+
+    def acquire(self):
+        lock_payload = (
+            f"pid={os.getpid()}\n"
+            f"part={self.part}\n"
+            f"time={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+        try:
+            fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as fp:
+                fp.write(lock_payload)
+            self.locked = True
+            return True
+        except FileExistsError:
+            owner = ""
+            try:
+                with open(self.lock_file, "r", encoding="utf-8") as fp:
+                    owner = fp.read().strip()
+            except Exception:
+                owner = "未知占用者"
+            raise RuntimeError(
+                "检测到已有处理任务在运行，为避免冲突已阻止本次执行。"
+                f"当前锁信息：{owner}"
+            )
+
+    def release(self):
+        if not self.locked:
+            return
+        try:
+            if os.path.exists(self.lock_file):
+                os.remove(self.lock_file)
+        finally:
+            self.locked = False
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.release()
+
 
 def get_col_index(sheet, field_name):
     """封装：获取字段对应的列索引（提前校验，避免索引错误）"""
@@ -48,8 +102,9 @@ def get_col_index(sheet, field_name):
 
 
 def process_device_list():
-    today_str = datetime.now().strftime("%Y/%m/%d")
-    print(f"开始处理 - {today_str}")
+    # 设备流程默认静默，仅输出最终成功/失败
+    real_print = builtins.print
+    print = lambda *args, **kwargs: None
 
     try:
         # ==============================
@@ -97,33 +152,120 @@ def process_device_list():
         # 【修改2】暂时跳过文本格式初始化，先执行核心复制操作
         print("🔹 跳过文本格式初始化，先执行核心操作")
 
-        # 1. 清空昨日数据 → 复制清单到昨日数据
-        print("🔹 复制清单数据到昨日数据工作表")
-        sht_yesterday.UsedRange.ClearContents()
+        # 1. 复制清单到昨天数据（仅复制值，不复制公式）
+        # 关键：必须先取清单快照，再清空昨天数据；否则清单中依赖昨天数据的公式会先失效
+        print("🔹 复制清单数据到昨天数据（先取值快照，再覆盖写入）")
 
         last_row_list = sht_list.UsedRange.Rows.Count
-        last_col_list = sht_list.UsedRange.Columns.Count
+        last_col_list = max(sht_list.UsedRange.Columns.Count, 24)  # 至少覆盖到X列
+
+        # 后续 T/U/X 逻辑需要用到昨天状态与X列值，先初始化映射
+        yesterday_status_map = {}
+        id_text_fields = ["站址编码", "站址运维ID", "FSU运维ID", "设备运维ID", "运维ID"]
+
+        def _normalize_matrix(values):
+            """将 Excel Range.Value 统一成二维 list。"""
+            if values is None:
+                return []
+            if isinstance(values, tuple):
+                if len(values) == 0:
+                    return []
+                if isinstance(values[0], tuple):
+                    return [list(r) for r in values]
+                return [list(values)]
+            return [[values]]
+
+        def _is_excel_error(v):
+            # COM 错误码通常是负整数，字符串 #N/A 也视为错误值
+            return (isinstance(v, int) and v < 0) or (isinstance(v, str) and v.strip().upper() == "#N/A")
+
+        def _to_text_for_id(v):
+            """长数字ID统一转文本，避免科学计数法。"""
+            if v is None:
+                return ""
+            if isinstance(v, float):
+                # 对整数型浮点去掉 .0，避免 123456.0
+                if v.is_integer():
+                    return str(int(v))
+                return format(v, "f").rstrip("0").rstrip(".")
+            if isinstance(v, int):
+                return str(v)
+            return str(v).strip()
 
         if last_row_list >= 1 and last_col_list >= 1:
-            # 【最终方案】先计算源表所有公式，然后使用Excel粘贴为数值
+            # 先计算一次，确保公式结果稳定，再取值快照
             try:
                 excel.Calculate()
                 sht_list.Calculate()
             except:
                 pass
-            
-            # 复制源表整个区域
-            sht_list.Range(
+
+            src_rng = sht_list.Range(
                 sht_list.Cells(1, 1),
                 sht_list.Cells(last_row_list, last_col_list)
-            ).Copy()
-            
-            # 直接粘贴为数值（Paste=-4163 就是粘贴为数值）
-            sht_yesterday.Range("A1").PasteSpecial(Paste=-4163)
-            
-            # 清除剪切板模式
-            excel.CutCopyMode = False
-            print("✅ 粘贴为数值完成")
+            )
+            src_data = _normalize_matrix(src_rng.Value)
+            cleaned_data = []
+            header_col_map = {}
+
+            # 固定列号（1-based）
+            b_col = 2
+            n_col = 14
+            x_col = 24
+
+            for row_idx, row in enumerate(src_data):
+                clean_row = []
+                # 第一行表头，先建立字段到列号映射
+                if row_idx == 0:
+                    for idx, h in enumerate(row, start=1):
+                        h_name = str(h).strip() if h is not None else ""
+                        if h_name:
+                            header_col_map[h_name] = idx
+
+                for col_idx, val in enumerate(row, start=1):
+                    if _is_excel_error(val):
+                        clean_val = ""
+                    else:
+                        clean_val = val
+
+                    # X列（故障时间）仅保留值，不保留错误值
+                    if col_idx == x_col and _is_excel_error(clean_val):
+                        clean_val = ""
+
+                    # 指定ID字段强制转文本，防止科学计数法
+                    if row_idx >= 1:
+                        for field in id_text_fields:
+                            if header_col_map.get(field) == col_idx:
+                                clean_val = _to_text_for_id(clean_val)
+                                break
+
+                    clean_row.append(clean_val)
+
+                cleaned_data.append(clean_row)
+
+                # 跳过表头，构建昨天状态与X值映射，供后续 T/U/X 逻辑使用
+                if row_idx == 0:
+                    continue
+                site_code = str(clean_row[b_col - 1]).strip() if len(clean_row) >= b_col and clean_row[b_col - 1] is not None else ""
+                y_status = str(clean_row[n_col - 1]).strip() if len(clean_row) >= n_col and clean_row[n_col - 1] is not None else ""
+                if site_code:
+                    yesterday_status_map[site_code] = y_status
+
+            if cleaned_data:
+                # 写入前先清空昨天数据
+                sht_yesterday.UsedRange.ClearContents()
+                # 目标表对应ID列设置文本格式，避免Excel自动科学计数法
+                for field in id_text_fields:
+                    col_idx = header_col_map.get(field)
+                    if col_idx:
+                        sht_yesterday.Columns(col_idx).NumberFormat = "@"
+
+                sht_yesterday.Range(
+                    sht_yesterday.Cells(1, 1),
+                    sht_yesterday.Cells(last_row_list, last_col_list)
+                ).Value = cleaned_data
+
+            print("✅ 昨天数据快照完成（纯值，无公式）")
 
         # 2. 清空今日数据 → 批量写入爬取数据
         print("🔹 批量写入今日数据")
@@ -213,11 +355,18 @@ def process_device_list():
         sht_list.Range("A1").PasteSpecial(Paste=-4163)  # -4163=值，-4122=格式（可叠加）
         excel.CutCopyMode = False
 
+        # 修复：日期列只粘贴值后会显示为序列号（如46130），这里恢复为日期格式
+        for date_field in ["数据稽核时间", "稽核时间"]:
+            date_col_idx = get_col_index(sht_list, date_field)
+            if date_col_idx:
+                sht_list.Columns(date_col_idx).NumberFormat = "yyyy/m/d"
+                break
+
         # 【修改6】暂时跳兜底校验，先让核心操作完成
         print("🔹 跳过最终校验，先让核心操作完成")
 
-        # 7、清单异常匹配故障时间 + T/U列公式（核心批量处理逻辑）
-        print("🔹 批量处理清单数据，填充 S/T/U/X 列公式")
+        # 7、按业务规则处理清单 S/T/U/X
+        print("🔹 按规则处理清单 S/T/U/X 列")
 
         # ====================== 配置区 =======================
         n_col = 14  # 异常/准确 标识列（N列）
@@ -239,55 +388,71 @@ def process_device_list():
             sht_list.Range(sht_list.Cells(2, u_col), sht_list.Cells(list_last_row, u_col)).ClearContents()
             sht_list.Range(sht_list.Cells(2, x_col), sht_list.Cells(list_last_row, x_col)).ClearContents()
 
-            # 2. 批量生成公式数组
+            # 一次性读取 B/N 列
+            rng_site_code = _normalize_matrix(
+                sht_list.Range(sht_list.Cells(2, site_code_col), sht_list.Cells(list_last_row, site_code_col)).Value
+            )
+            rng_n_status = _normalize_matrix(
+                sht_list.Range(sht_list.Cells(2, n_col), sht_list.Cells(list_last_row, n_col)).Value
+            )
+
+            today_date = datetime.now().strftime("%Y-%m-%d")
+            t_values = []
+            u_values = []
             s_formula_array = []
-            t_formula_array = []
-            u_formula_array = []
             x_formula_array = []
+            x_today_rows = []
 
-            # 读取N列所有状态值（批量读取，提升效率）
-            rng_n_status = sht_list.Range(
-                sht_list.Cells(2, n_col),
-                sht_list.Cells(list_last_row, n_col)
-            ).Value
-
-            # 遍历每一行生成对应公式
             for row_idx in range(len(rng_n_status)):
-                # 当前行的实际行号（+1是因为从第2行开始，+row_idx是遍历偏移）
                 actual_row = row_idx + 2
-                # 获取当前行N列的状态
-                status = rng_n_status[row_idx][0] if (
-                            rng_n_status[row_idx] and rng_n_status[row_idx][0] is not None) else ""
-                status = str(status).strip()
+                site_code = str(rng_site_code[row_idx][0]).strip() if row_idx < len(rng_site_code) and rng_site_code[row_idx][0] is not None else ""
+                cur_status = str(rng_n_status[row_idx][0]).strip() if rng_n_status[row_idx][0] is not None else ""
+                y_status = yesterday_status_map.get(site_code, "")
 
-                # 判断是否为异常，是则填充公式，否则留空
-                if status == "异常":
-                    s_formula = f"=VLOOKUP(B{actual_row},网格!C:P,14,0)"
-                    x_formula = f"=VLOOKUP(B{actual_row},昨天数据!B:X,23,0)"
+                # 先处理 T/U（只按 N 列状态变化）
+                if y_status == "异常" and cur_status == "准确":
+                    t_values.append([today_date])
                 else:
-                    s_formula = ""
-                    x_formula = ""
-                
-                # T列公式：=IF(AND(VLOOKUP(B2,昨天数据!$B:$N,13,FALSE)="异常", N2="准确"), TODAY(), "")
-                t_formula = f'=IF(AND(VLOOKUP(B{actual_row},昨天数据!$B:$N,13,FALSE)="异常", N{actual_row}="准确"), TODAY(), "")'
-                
-                # U列公式：=IF(AND(VLOOKUP(B2,昨天数据!$B:$N,13,FALSE)="准确", N2="异常"), 1, "")
-                u_formula = f'=IF(AND(VLOOKUP(B{actual_row},昨天数据!$B:$N,13,FALSE)="准确", N{actual_row}="异常"), 1, "")'
+                    t_values.append([""])
 
-                s_formula_array.append([s_formula])
-                t_formula_array.append([t_formula])
-                u_formula_array.append([u_formula])
-                x_formula_array.append([x_formula])
+                is_new_fault = (y_status == "准确" and cur_status == "异常")
+                if is_new_fault:
+                    u_values.append([1])
+                else:
+                    u_values.append([""])
 
-            # 3. 批量写入公式到 S/T/U/X 列（一次性写入，效率极高）
+                # 再处理 S（仅 N=异常 时填公式）
+                if cur_status == "异常":
+                    s_formula_array.append([f"=VLOOKUP(B{actual_row},网格!C:P,14,0)"])
+                else:
+                    s_formula_array.append([""])
+
+                # 最后处理 X：
+                # - N=异常且新增故障(U=1)：写今天日期（后续覆盖）
+                # - N=异常且非新增：写昨天X列查找公式
+                # - 其他：留空
+                if cur_status == "异常":
+                    if is_new_fault:
+                        x_formula_array.append([""])
+                        x_today_rows.append(actual_row)
+                    else:
+                        x_formula_array.append([f"=VLOOKUP(B{actual_row},昨天数据!B:X,23,0)"])
+                else:
+                    x_formula_array.append([""])
+
+            # 批量写入（T/U为值，S/X为公式）
+            sht_list.Range(sht_list.Cells(2, t_col), sht_list.Cells(list_last_row, t_col)).Value = t_values
+            sht_list.Range(sht_list.Cells(2, u_col), sht_list.Cells(list_last_row, u_col)).Value = u_values
             sht_list.Range(sht_list.Cells(2, s_col), sht_list.Cells(list_last_row, s_col)).Formula = s_formula_array
-            sht_list.Range(sht_list.Cells(2, t_col), sht_list.Cells(list_last_row, t_col)).Formula = t_formula_array
-            sht_list.Range(sht_list.Cells(2, u_col), sht_list.Cells(list_last_row, u_col)).Formula = u_formula_array
             sht_list.Range(sht_list.Cells(2, x_col), sht_list.Cells(list_last_row, x_col)).Formula = x_formula_array
 
-            print(f"✅ 公式填充完成：共处理 {len(s_formula_array)} 行，自动填充 S/T/U/X 列公式")
+            # 新增故障行：X列改为今天日期
+            for r in x_today_rows:
+                sht_list.Cells(r, x_col).Value = today_date
+
+            print(f"✅ S/T/U/X 处理完成：共处理 {len(rng_n_status)} 行，新增故障 {len(x_today_rows)} 行")
         else:
-            print("⚠️ 清单工作表无有效数据，跳过公式填充")
+            print("⚠️ 清单工作表无有效数据，跳过 S/T/U/X 处理")
 
         # 8、【纯批量】清单G列填充VLOOKUP公式：=VLOOKUP(B2,网格!C:I,7,0)
         print("🔹 仅清单工作表：保留表头，清空G列数据并批量填充VLOOKUP公式")
@@ -351,11 +516,11 @@ def process_device_list():
         excel.Quit()
         pythoncom.CoUninitialize()
 
-        print("✅ 全部处理完成！")
+        real_print("✅ device 处理成功")
         return True
 
     except Exception as e:
-        print(f"❌ 失败：{str(e)}")
+        real_print(f"❌ device 处理失败：{str(e)}")
         # 异常处理时确保Excel资源释放
         try:
             excel.ScreenUpdating = True
@@ -377,14 +542,15 @@ def process_lessee_list():
     5. 优化COM对象释放逻辑
     6. 修复公式写入的相对引用问题
     """
-    today_str = datetime.now().strftime("%Y/%m/%d")
-    print(f"\n开始处理租户电流数据 - {today_str}")
+    # 租户流程默认静默，仅输出最终成功/失败
+    real_print = builtins.print
+    print = lambda *args, **kwargs: None
 
     # ==============================
     # 【配置区】- 根据实际路径调整
     # ==============================
     LESSEE_CONFIG = {
-        "target_excel": os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/分路租户异常通报.xlsx"),
+        "target_excel": os.path.join(BASE_PATH, r"app/service/jiliangzhibiao/down/分路租户异常通报（质询）.xlsx"),
         # 9个爬取的Excel文件路径（按顺序）
         "source_excels": [
             # 移动租户电流
@@ -600,132 +766,103 @@ def process_lessee_list():
             sht_settlement = wb_target.Sheets("结算配置和实际共享情况")
             last_row_settlement = sht_settlement.UsedRange.Rows.Count if sht_settlement.UsedRange.Rows.Count else 1
 
+            def _normalize_matrix(values):
+                if values is None:
+                    return []
+                if isinstance(values, tuple):
+                    if len(values) == 0:
+                        return []
+                    if isinstance(values[0], tuple):
+                        return [list(r) for r in values]
+                    return [list(values)]
+                return [[values]]
+
             if last_row_settlement >= 2:
-                print("   🔹 批量写入 L/M/N 列 VLOOKUP 公式（按J列判断）")
+                row_count = last_row_settlement - 1
+                print("   🔹 筛选 J列=基站能耗管理系统，批量写入匹配公式")
 
-                # --------------------------
-                # 🔥 终极方案：只更新符合条件的行，其余完全保留原有数据
-                # --------------------------
-                # 1. 一次性读取J列所有数据
-                j_data = sht_settlement.Range(f"J2:J{last_row_settlement}").Value
+                # 读取 J 列作为筛选条件；读取现有 L:R 公式，非目标行保持原值不被覆盖
+                j_vals = _normalize_matrix(sht_settlement.Range(f"J2:J{last_row_settlement}").Value)
+                lr_existing = _normalize_matrix(sht_settlement.Range(f"L2:R{last_row_settlement}").Formula)
 
-                # 2. 只记录【符合条件】的行号 + 公式（不符合的直接跳过）
-                update_rows = []  # 存储要更新的行号
-                l_formulas = []
-                m_formulas = []
-                n_formulas = []
+                l_out, m_out, n_out = [], [], []
+                o_out, p_out, q_out, r_out = [], [], [], []
+                active_flags = []
 
-                for idx, item in enumerate(j_data):
-                    row_num = idx + 2  # 真实行号
-                    j_val = str(item[0]).strip() if (item and item[0] is not None) else ""
+                for idx in range(row_count):
+                    row_num = idx + 2
+                    j_val = str(j_vals[idx][0]).strip() if idx < len(j_vals) and j_vals[idx][0] is not None else ""
+                    existing = lr_existing[idx] if idx < len(lr_existing) else [""] * 7
+                    is_active = j_val in ["分路计量设备", "开关电源"]
+                    active_flags.append(is_active)
 
-                    # ✅ 只处理这2种，其余全部跳过，保留原有数据！
-                    if j_val in ["分路计量设备", "开关电源"]:
-                        update_rows.append(row_num)
-                        l_formulas.append([f"=VLOOKUP(K{row_num},移动电流!R:S,2,0)"])
-                        m_formulas.append([f"=VLOOKUP(K{row_num},联通电流!R:S,2,0)"])
-                        n_formulas.append([f"=VLOOKUP(K{row_num},电信电流!R:S,2,0)"])
+                    if is_active:
+                        l_out.append([f"=IFERROR(VLOOKUP(K{row_num},移动电流!R:S,2,0),\"\")"])
+                        m_out.append([f"=IFERROR(VLOOKUP(K{row_num},联通电流!R:S,2,0),\"\")"])
+                        n_out.append([f"=IFERROR(VLOOKUP(K{row_num},电信电流!R:S,2,0),\"\")"])
+                        o_out.append([f'=IF(G{row_num}="移动",IF(L{row_num}>0,"匹配","不匹配"),IF(L{row_num}>0,"不匹配","匹配"))'])
+                        p_out.append([f'=IF(H{row_num}="联通",IF(M{row_num}>0,"匹配","不匹配"),IF(M{row_num}>0,"不匹配","匹配"))'])
+                        q_out.append([f'=IF(I{row_num}="电信",IF(N{row_num}>0,"匹配","不匹配"),IF(N{row_num}>0,"不匹配","匹配"))'])
+                        r_out.append([f'=IF(O{row_num}="匹配",IF(P{row_num}="匹配",IF(Q{row_num}="匹配","整改完成","FALSE"),"FALSE"),"FALSE")'])
+                    else:
+                        l_out.append([existing[0] if len(existing) >= 1 else ""])
+                        m_out.append([existing[1] if len(existing) >= 2 else ""])
+                        n_out.append([existing[2] if len(existing) >= 3 else ""])
+                        o_out.append([existing[3] if len(existing) >= 4 else ""])
+                        p_out.append([existing[4] if len(existing) >= 5 else ""])
+                        q_out.append([existing[5] if len(existing) >= 6 else ""])
+                        r_out.append([existing[6] if len(existing) >= 7 else ""])
 
-                # 3. 🔥 只批量写入【符合条件的行】，其他行完全不动！
-                if update_rows:
-                    # 批量写入L/M/N
-                    sht_settlement.Range(f"L{update_rows[0]}:L{update_rows[-1]}").Formula = l_formulas
-                    sht_settlement.Range(f"M{update_rows[0]}:M{update_rows[-1]}").Formula = m_formulas
-                    sht_settlement.Range(f"N{update_rows[0]}:N{update_rows[-1]}").Formula = n_formulas
+                # 批量落公式/值（一次性写入，避免逐单元格 COM 调用）
+                sht_settlement.Range(f"L2:L{last_row_settlement}").Formula = l_out
+                sht_settlement.Range(f"M2:M{last_row_settlement}").Formula = m_out
+                sht_settlement.Range(f"N2:N{last_row_settlement}").Formula = n_out
+                sht_settlement.Range(f"O2:O{last_row_settlement}").Formula = o_out
+                sht_settlement.Range(f"P2:P{last_row_settlement}").Formula = p_out
+                sht_settlement.Range(f"Q2:Q{last_row_settlement}").Formula = q_out
+                sht_settlement.Range(f"R2:R{last_row_settlement}").Formula = r_out
 
-                # # 3. 一次性批量写入Excel（只交互1次，巨快）
-                # if l_formulas:
-                #     # 🔥 关键：只写入有公式的行，不覆盖原有数据
-                #     sht_settlement.Range(f"L2:L{last_row_settlement}").Formula = l_formulas
-                #     sht_settlement.Range(f"M2:M{last_row_settlement}").Formula = m_formulas
-                #     sht_settlement.Range(f"N2:N{last_row_settlement}").Formula = n_formulas
-
-                # --------------------------
-                # O/P/Q/R 列 批量写入公式
-                # --------------------------
-                print("   🔹 批量写入 O/P/Q/R 列判断公式")
-                # O列 = 15
-                sht_settlement.Range(
-                    f"O2:O{last_row_settlement}").Formula = '=IF(G2="移动",IF(L2>0,"匹配","不匹配"),IF(L2>0,"不匹配","匹配"))'
-                # P列 = 16
-                sht_settlement.Range(
-                    f"P2:P{last_row_settlement}").Formula = '=IF(H2="联通",IF(M2>0,"匹配","不匹配"),IF(M2>0,"不匹配","匹配"))'
-                # Q列 = 17
-                sht_settlement.Range(
-                    f"Q2:Q{last_row_settlement}").Formula = '=IF(I2="电信",IF(N2>0,"匹配","不匹配"),IF(N2>0,"不匹配","匹配"))'
-                # R列 = 18
-                sht_settlement.Range(
-                    f"R2:R{last_row_settlement}").Formula = '=IF(O2="匹配",IF(P2="匹配",IF(Q2="匹配","整改完成","FALSE")))'
-
-                # # --------------------------
-                # # S列：如果为空 → 填入“数据正常”
-                # # --------------------------
-                # print("   🔹 S列空值填充：数据正常")
-                # # S列 = 19
-                # sht_settlement.Range(f"S2:S{last_row_settlement}").Formula = '=IF(S2="","数据正常",S2)'
-
-                # 强制计算
                 excel.Calculate()
 
-                # 设置数值格式
-                print("   🔹 设置 L/M/N 列为数值格式 0.00")
-                for col in [12, 13, 14]:
-                    sht_settlement.Columns(col).NumberFormat = "0.00"
-
-                # 替换 #N / -2146826246 / 0 / 0.00 为空
-                print("   🔹 替换无效值为空")
+                # 清洗 L/M/N：删除 #N/A 和 0
                 for col_idx in [12, 13, 14]:
-                    rng = sht_settlement.Range(sht_settlement.Cells(2, col_idx),
-                                               sht_settlement.Cells(last_row_settlement, col_idx))
-                    vals = rng.Value or []
-                    new_vals = []
-                    for v in vals:
-                        cell_val = v[0] if isinstance(v, (list, tuple)) else v
-
-                        # 🔥 关键修复：增加 -2146826246 判断（#N/A 错误码）
+                    rng = sht_settlement.Range(sht_settlement.Cells(2, col_idx), sht_settlement.Cells(last_row_settlement, col_idx))
+                    vals = _normalize_matrix(rng.Value)
+                    cleaned = []
+                    for idx, v in enumerate(vals):
+                        cell_val = v[0] if v else ""
+                        if not active_flags[idx]:
+                            cleaned.append([cell_val])
+                            continue
                         if cell_val == -2146826246 or \
-                                (isinstance(cell_val, str) and cell_val == "#N/A") or \
-                                (isinstance(cell_val, (int, float)) and cell_val == 0) or \
-                                (cell_val == "0.00"):
-                            new_vals.append([""])
+                                (isinstance(cell_val, str) and cell_val.strip().upper() == "#N/A") or \
+                                (isinstance(cell_val, (int, float)) and float(cell_val) == 0.0) or \
+                                (str(cell_val).strip() in ["0", "0.0", "0.00"]):
+                            cleaned.append([""])
                         else:
-                            new_vals.append([cell_val])
-                    if new_vals:
-                        rng.Value = new_vals
+                            cleaned.append([cell_val])
+                    rng.Value = cleaned
 
-                # --------------------------
-                # 🔥 最终版：保留 W/Z 原始数据，仅更新符合条件的行
-                # --------------------------
-                print("   🔹 按条件写入 W列处理时间 / Z列故障数时间（保留原有数据）")
+                # 按规则更新 W / Z（批量写入）
                 current_time = datetime.now().strftime("%Y-%m-%d")
+                rs_vals = _normalize_matrix(sht_settlement.Range(f"R2:S{last_row_settlement}").Value)
+                w_vals = _normalize_matrix(sht_settlement.Range(f"W2:W{last_row_settlement}").Value)
+                z_vals = _normalize_matrix(sht_settlement.Range(f"Z2:Z{last_row_settlement}").Value)
 
-                # 批量读取 R、S、W、Z 四列原始数据
-                rng = sht_settlement.Range(f"R2:Z{last_row_settlement}")
-                data = rng.Value if rng.Value else []
+                for idx in range(row_count):
+                    if not active_flags[idx]:
+                        continue
+                    r_val = str(rs_vals[idx][0]).strip().upper() if idx < len(rs_vals) and rs_vals[idx][0] is not None else ""
+                    s_val = str(rs_vals[idx][1]).strip() if idx < len(rs_vals) and len(rs_vals[idx]) > 1 and rs_vals[idx][1] is not None else ""
 
-                # 遍历每一行，保留原始数据，只改符合条件的
-                for row_idx in range(len(data)):
-                    row = data[row_idx]
-                    # 读取各列值
-                    r_val = str(row[0]).strip() if row[0] is not None else ""
-                    s_val = str(row[1]).strip() if row[1] is not None else ""
-                    w_old = row[4]  # W列原始值
-                    z_old = row[7]  # Z列原始值
-
-                    # ======================
-                    # 规则 1：只在满足条件时更新
-                    # ======================
                     if r_val == "整改完成" and s_val == "维护处理":
-                        # W列写入新时间，Z列保持原样
-                        sht_settlement.Cells(row_idx + 2, 23).Value = current_time
+                        w_vals[idx][0] = current_time
+                    elif r_val == "FALSE" and s_val == "数据正常":
+                        z_vals[idx][0] = 1
 
-                    elif (r_val == "False" or r_val == "FALSE") and s_val == "数据正常":
-                        # Z列写入新时间，W列保持原样
-                        sht_settlement.Cells(row_idx + 2, 26).Value = current_time
-
-                    # 不满足条件：什么都不做，保留原始数据！
-
-                print(f"   ✅ 处理完成：共 {last_row_settlement - 1} 行")
+                sht_settlement.Range(f"W2:W{last_row_settlement}").Value = w_vals
+                sht_settlement.Range(f"Z2:Z{last_row_settlement}").Value = z_vals
+                print(f"   ✅ 结算配置处理完成：共处理 {row_count} 行（筛选来源：基站能耗管理系统）")
             else:
                 print("   ⚠️ 子表无数据，跳过")
 
@@ -739,12 +876,9 @@ def process_lessee_list():
         # ==============================
         excel.ScreenUpdating = True
         wb_target.Save()
-        print(f"\n✅ 目标文件已保存")
 
     except Exception as e:
-        print(f"\n❌ 处理失败：{str(e)}")
-        import traceback
-        traceback.print_exc()
+        real_print(f"❌ lessee 处理失败：{str(e)}")
         return False
 
     finally:
@@ -761,12 +895,37 @@ def process_lessee_list():
         except:
             pass
         pythoncom.CoUninitialize()
-        print("✅ Excel资源已释放")
 
-    print("\n✅ 全部电流数据处理完成！数据已全新写入无残留！")
+    real_print("✅ lessee 处理成功")
     return True
 
 
+def _run_with_lock(part, runner):
+    """统一加锁执行，确保设备/租户处理不会并发冲突。"""
+    try:
+        with SingleProcessLock(LOCK_FILE, part):
+            return runner()
+    except Exception as e:
+        print(f"❌ 任务 {part} 无法执行：{str(e)}")
+        return False
+
+
+def run_device_process():
+    """接口调用：仅执行设备清单流程。"""
+    return _run_with_lock("device", process_device_list)
+
+
+def run_lessee_process():
+    """接口调用：仅执行租户电流流程。"""
+    return _run_with_lock("lessee", process_lessee_list)
+
+
 if __name__ == '__main__':
-    process_device_list()
-    process_lessee_list()
+    # 只跑设备流程：保留下一行，注释 run_lessee_process()
+    # 只跑租户流程：注释 run_device_process()，保留下一行
+    # 两个都跑：两行都保留
+    ok_device = True
+    ok_lessee = True
+    ok_device = run_device_process()
+    ok_lessee = run_lessee_process()
+    sys.exit(0 if (ok_device and ok_lessee) else 1)
